@@ -297,10 +297,15 @@ fn ln10_float(prec: u64) -> Float {
 
 // --------------------------------------------------------- elementary series
 
-/// e^x. The callers keep |x| at Windows' limit of 100000.
-fn exp_float(x: &Float, prec: u64) -> Float {
+/// e^x. The callers keep |x| within Windows' limit of 100000 (twice that for `tanh`'s
+/// e^−2|x|). Far beyond it, k would no longer fit and the series would never end, so
+/// that's `Invalid input`, like `exprat`, rather than a hang.
+fn exp_float(x: &Float, prec: u64) -> Result<Float, CalcError> {
+    if x.to_f64().abs() > 4.0 * MAX_EXP {
+        return Err(CalcError::InvalidInput);
+    }
     if x.is_zero() {
-        return Float::int(1);
+        return Ok(Float::int(1));
     }
     // x = k ln 2 + r with |r| ≤ ln 2 / 2; e^r from its Taylor series after halving r
     // 16 times, then squared back. The guard bits cover k and the squarings.
@@ -324,11 +329,11 @@ fn exp_float(x: &Float, prec: u64) -> Float {
     for _ in 0..HALVINGS {
         sum = (&sum * &sum) >> q as usize;
     }
-    Float {
+    Ok(Float {
         m: sum,
         e: k - q as i64,
     }
-    .round(prec)
+    .round(prec))
 }
 
 /// ln x for x > 0.
@@ -498,6 +503,11 @@ fn decimal_exponent(v: &Number) -> i64 {
     exponent(&v.numer().abs(), v.denom())
 }
 
+/// 10^-32 (`rat_smallest`).
+fn smallest() -> Number {
+    Number::new(BigInt::one(), pow10(SMALLEST_DIGITS))
+}
+
 /// Whether |v| ≤ 10^-32 (`rat_smallest`), Windows' "practically zero".
 fn is_negligible(v: &Float) -> bool {
     if v.is_zero() {
@@ -506,8 +516,7 @@ fn is_negligible(v: &Float) -> bool {
     if v.magnitude() > -100 {
         return false;
     }
-    let smallest = Number::new(BigInt::one(), pow10(SMALLEST_DIGITS));
-    v.to_rational().abs() <= smallest
+    v.to_rational().abs() <= smallest()
 }
 
 /// The extra bits that keep the relative precision of a function f(x) ≈ x near 0.
@@ -532,10 +541,8 @@ pub fn pi() -> Number {
 pub fn euler() -> Number {
     static E: OnceLock<Number> = OnceLock::new();
     E.get_or_init(|| {
-        round_digits(
-            &exp_float(&Float::int(1), PREC).to_rational(),
-            INTERNAL_DIGITS,
-        )
+        let e = exp_float(&Float::int(1), PREC).expect("e^1 is within range");
+        round_digits(&e.to_rational(), INTERNAL_DIGITS)
     })
     .clone()
 }
@@ -615,7 +622,7 @@ pub fn exp(x: &Number) -> Result<Number, CalcError> {
     if x.to_f64().is_none_or(|v| v.abs() > MAX_EXP) {
         return Err(CalcError::InvalidInput);
     }
-    finish(&exp_float(&Float::from_rational(x, PREC + 32), PREC))
+    finish(&exp_float(&Float::from_rational(x, PREC + 32), PREC)?)
 }
 
 /// `x^y` (`powrat`). Integer powers are exact while the result stays a reasonable size.
@@ -639,7 +646,7 @@ pub fn power(x: &Number, y: &Number) -> Result<Number, CalcError> {
     let negative = x.is_negative();
     let base = x.abs();
     // A positive base within 10^-32 of 1 is 1.
-    let smallest = Number::new(BigInt::one(), pow10(SMALLEST_DIGITS));
+    let smallest = smallest();
     if !negative && (&base - Number::one()).abs() < smallest {
         return Ok(Number::one());
     }
@@ -669,7 +676,7 @@ pub fn power(x: &Number, y: &Number) -> Result<Number, CalcError> {
             exact
         } else {
             let ln = ln_checked(&base, PREC + 40)?;
-            finish(&exp_float(&ln.mul(&Float::int(n.into()), PREC + 40), PREC))?
+            finish(&exp_float(&ln.mul(&Float::int(n.into()), PREC + 40), PREC)?)?
         };
         return Ok(if result_negative {
             -magnitude
@@ -695,7 +702,12 @@ pub fn power(x: &Number, y: &Number) -> Result<Number, CalcError> {
     let p = PREC + 40 + y_bits;
     let ln = ln_checked(&base, p)?;
     let product = ln.mul(&Float::from_rational(y, p), p);
-    let magnitude = finish(&exp_float(&product, PREC))?;
+    // The estimate above is 0 for a base within about 10^-16 of 1, so like `exprat`,
+    // check the product itself: 1.00000000000000001^(10^40 + 0.5) is `Invalid input`.
+    if product.to_f64().abs() > MAX_EXP {
+        return Err(CalcError::InvalidInput);
+    }
+    let magnitude = finish(&exp_float(&product, PREC)?)?;
     Ok(if result_negative {
         -magnitude
     } else {
@@ -805,7 +817,7 @@ pub fn asin(x: &Number, angle: Angle) -> Result<Number, CalcError> {
 
 fn asin_float(x: &Number, p: u64) -> Result<Float, CalcError> {
     let one = Number::one();
-    let smallest = Number::new(BigInt::one(), pow10(SMALLEST_DIGITS));
+    let smallest = smallest();
     let distance = x.abs() - &one;
     if distance > smallest {
         return Err(CalcError::InvalidInput);
@@ -844,7 +856,7 @@ pub fn atan(x: &Number, angle: Angle) -> Result<Number, CalcError> {
     finish(&from_radians(r, angle, p))
 }
 
-/// 1/x for the reciprocal functions (sec, csc, cot and their inverses).
+/// 1/x for `1/x` and the reciprocal functions (sec, csc, cot and their inverses).
 pub fn invert(x: &Number) -> Result<Number, CalcError> {
     if x.is_zero() {
         Err(CalcError::DivideByZero)
@@ -872,7 +884,7 @@ fn sinh_float(x: &Number) -> Result<Float, CalcError> {
         let (s, _) = sin_cos_sums(&xf, p, true);
         return Ok(xf.mul(&s, p));
     }
-    let (plus, minus) = (exp_float(&xf, p), exp_float(&xf.clone().neg(), p));
+    let (plus, minus) = (exp_float(&xf, p)?, exp_float(&xf.clone().neg(), p)?);
     Ok(plus.sub(&minus, p).shl(-1))
 }
 
@@ -891,7 +903,7 @@ fn cosh_float(x: &Number) -> Result<Float, CalcError> {
     if v < 1.0 {
         return Ok(sin_cos_sums(&xf, p, true).1);
     }
-    let (plus, minus) = (exp_float(&xf, p), exp_float(&xf.clone().neg(), p));
+    let (plus, minus) = (exp_float(&xf, p)?, exp_float(&xf.clone().neg(), p)?);
     Ok(plus.add(&minus, p).shl(-1))
 }
 
@@ -909,7 +921,7 @@ pub fn tanh(x: &Number) -> Result<Number, CalcError> {
     }
     // (1 − e^−2|x|) / (1 + e^−2|x|), which needs no huge powers.
     let one = Float::int(1);
-    let small = exp_float(&xf.clone().abs().shl(1).neg(), p);
+    let small = exp_float(&xf.clone().abs().shl(1).neg(), p)?;
     let t = one.sub(&small, p).div(&one.add(&small, p), PREC);
     finish(&if xf.is_negative() { t.neg() } else { t })
 }
@@ -962,9 +974,8 @@ pub fn factorial(x: &Number) -> Result<Number, CalcError> {
     if *x > Number::from_integer(MAX_FACT.into()) || *x < Number::from_integer(MIN_FACT.into()) {
         return Err(CalcError::Overflow);
     }
-    let smallest = Number::new(BigInt::one(), pow10(SMALLEST_DIGITS));
     let nearest = x.round();
-    if (x - &nearest).abs() < smallest {
+    if (x - &nearest).abs() < smallest() {
         if nearest.is_negative() {
             return Err(CalcError::InvalidInput);
         }
@@ -1001,14 +1012,14 @@ pub fn factorial(x: &Number) -> Result<Number, CalcError> {
     }
     let p = PREC + 16;
     let z = Number::new(t + &b, b);
-    let gamma = gamma_unit(&Float::from_rational(&z, p), p);
+    let gamma = gamma_unit(&Float::from_rational(&z, p), p)?;
     let factor = Float::from_rational(&BigRational::new_raw(numerator, denominator), p);
     finish(&gamma.mul(&factor, PREC))
 }
 
 /// Γ(z) for z in (0, 1): Γ(z) = Γ(z + N) / (z (z + 1) … (z + N − 1)), and ln Γ(z + N)
 /// from Stirling's series, which is far more precise than needed that far from 0.
-fn gamma_unit(z: &Float, prec: u64) -> Float {
+fn gamma_unit(z: &Float, prec: u64) -> Result<Float, CalcError> {
     const SHIFT: i64 = 40;
     let q = prec + 32;
     let w = z.add(&Float::int(SHIFT), q);
@@ -1033,7 +1044,7 @@ fn gamma_unit(z: &Float, prec: u64) -> Float {
     for i in 1..SHIFT {
         product = product.mul(&z.add(&Float::int(i), q), q);
     }
-    exp_float(&sum, q).div(&product, prec)
+    Ok(exp_float(&sum, q)?.div(&product, prec))
 }
 
 /// The Bernoulli numbers B₂, B₄, … B₆₀, exact.
@@ -1167,6 +1178,27 @@ mod tests {
         assert_eq!(show(power(&n("10"), &n("9999"))), "1.e+9999");
         assert_eq!(show(power(&n("10"), &n("10000"))), "Overflow");
         assert_eq!(show(power(&n("10"), &n("50000"))), "Invalid input");
+        // `exprat` checks y ln x itself: this close to 1 an f64 estimate of ln x is 0, but
+        // the product is 150000.
+        assert_eq!(
+            show(power(
+                &n("1.00000000000000001"),
+                &n("15000000000000000000000.5")
+            )),
+            "Invalid input"
+        );
+        assert_eq!(
+            show(power(
+                &n("1.00000000000000001"),
+                &n("10000000000000000000000000000000000000000.5")
+            )),
+            "Invalid input"
+        );
+        // Far beyond the limit, e^x itself refuses instead of never ending.
+        assert!(matches!(
+            exp_float(&Float::int(1 << 62), PREC),
+            Err(CalcError::InvalidInput)
+        ));
         assert_eq!(
             show(power(&n("1.5"), &n("2.5"))),
             "2.7556759606310753604719445840441"
