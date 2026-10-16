@@ -5,7 +5,7 @@
 //! Windows Calculator source. Month and year steps clamp to the end of the
 //! month (January 31 + 1 month = February 28), like the Windows calendar.
 
-use chrono::{Datelike, Days, Months, NaiveDate};
+use chrono::{Datelike, Days, Months, NaiveDate, Weekday};
 
 /// Earliest supported date: the start of the Windows `FILETIME` epoch.
 pub const MIN_DATE: NaiveDate = NaiveDate::from_ymd_opt(1601, 1, 1).unwrap();
@@ -99,35 +99,58 @@ pub fn subtract(date: NaiveDate, years: u32, months: u32, days: u32) -> Option<N
 
 // ------------------------------------------------------------- formatting
 
+/// The words of the "Difference" result, in the interface's language. The UI takes
+/// them from the Windows Calculator's translations; `ENGLISH` is the en-US text.
+#[derive(Clone, Copy, Debug)]
+pub struct Words<'a> {
+    pub same_dates: &'a str,
+    /// Each unit's singular and plural (`Date_Year` and `Date_Years`, …).
+    pub year: [&'a str; 2],
+    pub month: [&'a str; 2],
+    pub week: [&'a str; 2],
+    pub day: [&'a str; 2],
+    /// Joins the units: Windows uses the region's list separator and a space.
+    pub separator: &'a str,
+}
+
+pub const ENGLISH: Words<'static> = Words {
+    same_dates: "Same dates",
+    year: ["year", "years"],
+    month: ["month", "months"],
+    week: ["week", "weeks"],
+    day: ["day", "days"],
+    separator: ", ",
+};
+
 /// The "Difference" result: the main line and, for 7 days or more, a second
 /// line with the total number of days.
-pub fn describe_difference(a: NaiveDate, b: NaiveDate) -> (String, Option<String>) {
+pub fn describe_difference(a: NaiveDate, b: NaiveDate, words: &Words) -> (String, Option<String>) {
     let total = days_between(a, b);
     if total == 0 {
-        return ("Same dates".to_string(), None);
+        return (words.same_dates.to_string(), None);
     }
     let diff = difference(a, b);
-    let in_days = count(total, "day", "days");
+    let in_days = count(total, words.day);
     if diff.years == 0 && diff.months == 0 && diff.weeks == 0 {
         return (in_days, None);
     }
     let parts = [
-        (diff.years, "year", "years"),
-        (diff.months, "month", "months"),
-        (diff.weeks, "week", "weeks"),
-        (diff.days, "day", "days"),
+        (diff.years, words.year),
+        (diff.months, words.month),
+        (diff.weeks, words.week),
+        (diff.days, words.day),
     ];
     let text = parts
         .iter()
-        .filter(|(value, _, _)| *value > 0)
-        .map(|&(value, one, many)| count(value, one, many))
+        .filter(|(value, _)| *value > 0)
+        .map(|&(value, unit)| count(value, unit))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(words.separator);
     (text, Some(in_days))
 }
 
-/// `1 day`, `5 days`: singular only for exactly one.
-fn count(value: u32, one: &str, many: &str) -> String {
+/// `1 day`, `5 days`: singular only for exactly one, as in Windows (no plural rules).
+fn count(value: u32, [one, many]: [&str; 2]) -> String {
     format!("{value} {}", if value == 1 { one } else { many })
 }
 
@@ -143,11 +166,14 @@ pub fn format_long_date(date: NaiveDate) -> String {
 
 // -------------------------------------------------------------- calendar
 
-/// First cell of a month page in the calendar: the Sunday on or before the 1st.
-/// The page always shows 6 weeks (42 days) from there.
-pub fn month_page_start(year: i32, month: u32) -> NaiveDate {
+/// First cell of a month page in the calendar: the first day of the week (`week_start`,
+/// a regional setting) on or before the 1st. The page always shows 6 weeks (42 days)
+/// from there.
+pub fn month_page_start(year: i32, month: u32, week_start: Weekday) -> NaiveDate {
     let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
-    first - Days::new(first.weekday().num_days_from_sunday().into())
+    let days_back =
+        (first.weekday().num_days_from_monday() + 7 - week_start.num_days_from_monday()) % 7;
+    first - Days::new(days_back.into())
 }
 
 /// Keeps a date inside the supported range.
@@ -164,7 +190,7 @@ mod tests {
     }
 
     fn describe(a: &str, b: &str) -> (String, Option<String>) {
-        describe_difference(date(a), date(b))
+        describe_difference(date(a), date(b), &ENGLISH)
     }
 
     fn diff(years: u32, months: u32, weeks: u32, days: u32) -> Difference {
@@ -315,8 +341,12 @@ mod tests {
     #[test]
     fn calendar_page() {
         // October 2026 starts on a Thursday; the page starts on Sunday, September 27.
-        assert_eq!(month_page_start(2026, 10), date("2026-09-27"));
+        assert_eq!(month_page_start(2026, 10, Weekday::Sun), date("2026-09-27"));
         // A month starting on Sunday starts its own page.
-        assert_eq!(month_page_start(2026, 2), date("2026-02-01"));
+        assert_eq!(month_page_start(2026, 2, Weekday::Sun), date("2026-02-01"));
+        // Regions whose weeks start on another day.
+        assert_eq!(month_page_start(2026, 10, Weekday::Mon), date("2026-09-28"));
+        assert_eq!(month_page_start(2026, 6, Weekday::Mon), date("2026-06-01"));
+        assert_eq!(month_page_start(2026, 2, Weekday::Sat), date("2026-01-31"));
     }
 }

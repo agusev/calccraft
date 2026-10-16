@@ -46,8 +46,8 @@ own `NOT_STARTED` entry.
 | **Phase 5: Date Calculation** | 4 | 4 | 0 | 0 | 0 |
 | **Phase 6: Unit Conversion (13 categories)** | 14 | 13 | 0 | 0 | 1 |
 | **Phase 7: Graphing Calculator** | 6 | 0 | 0 | 0 | 6 |
-| **Phase 8: Application Shell, UX & Accessibility** | 10 | 5 | 0 | 0 | 5 |
-| **TOTAL** | **64** | **37** | **0** | **0** | **27** |
+| **Phase 8: Application Shell, UX & Accessibility** | 11 | 10 | 0 | 1 | 0 |
+| **TOTAL** | **65** | **42** | **0** | **1** | **22** |
 
 *Last updated: 2026-10-15 (CalcCraft 0.2.0)*
 
@@ -76,7 +76,9 @@ graph TD
 6. **Phase 6: Unit converters** (`src/converter.rs`, `src/app/converter_view.rs`): 12 converters
    with Windows' units, factors and rounding. *Done, except the Currency converter.*
 7. **Phase 7: Graphing mode**: expression parser, plotting, variable sliders, graph analysis.
-8. **Phase 8: Shell & system**: navigation, theming, layouts, hotkeys, accessibility, localization.
+8. **Phase 8: Shell & system** (`src/app.rs`, `src/app/access.rs`, `src/app/strings.rs`, `src/app/region.rs`,
+   `src/locale.rs`): navigation, theming, layouts, hotkeys, accessibility, localization. *Done,
+   except right-to-left and complex scripts, which egui can't draw yet.*
 
 ---
 
@@ -256,9 +258,8 @@ UI code and is covered by unit tests.*
   - The panel covers the keypad; clicking the display or pressing `Esc` closes it.
   - Memory items show `MC`, `M+` and `M−` on hover; clicking an item recalls it.
   - Right-clicking an item opens its context menu (`FEAT-STD-007`).
-  - Empty panels show "There's no history yet" / "There's nothing saved in memory".
-- **Differences:** Windows docks history and memory in a side panel in wide windows. CalcCraft
-  always uses the flyout. Docking is part of `FEAT-SHELL-002`.
+  - Empty panels show "There’s no history yet." / "There’s nothing saved in memory."
+  - From 560 px wide, the panels dock next to the keypad instead (`FEAT-SHELL-002`).
 
 #### `FEAT-STD-004` Always-on-Top (Compact Overlay) Mode
 - **Status:** `[x] COMPLETED`
@@ -531,7 +532,8 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
 - **Windows ref:** `src/Calculator/Resources/en-US/Resources.resw` (`Date_Day`, `Date_Days`, …)
 - **Rust:** `src/dates.rs` (`count`)
 - **Description:** `1 year`, `2 years`; zero units are left out; the total in days has no grouping (`1587 days`).
-- **Differences:** English only. Other languages belong to `FEAT-SHELL-007`.
+- **Differences:** none: the words come from Windows' translations (`FEAT-SHELL-007`) and, as
+  in Windows, only exactly 1 is singular, in every language.
 
 #### `FEAT-DATE-004` Date Calculation UI
 - **Status:** `[x] COMPLETED`
@@ -546,8 +548,9 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
   - Sizes from `DateCalculator.xaml`; the result font is 20 px from a 480 px window width, 14 px below.
   - The calendar works with its arrows and the mouse wheel; `Esc` closes popups; `Ctrl+C` copies the result.
   - Both themes.
-- **Differences:** always the Gregorian calendar, en-US date formats and weeks starting on Sunday.
-  There is no keyboard navigation inside the calendar and lists yet (`FEAT-SHELL-005`).
+- **Differences:** always the Gregorian calendar. Date formats, month and weekday names and the
+  first day of the week follow the region (`FEAT-SHELL-007`); the keyboard reaches the calendar
+  and the lists (`FEAT-SHELL-005`).
 
 ---
 
@@ -788,22 +791,32 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
   calculation, and 13 converters. CalcCraft lists only the implemented modes (Standard, Date
   calculation and 12 converters, without Currency). Windows draws six converter icons (Volume,
   Weight, Temperature, Speed, Data, Angle) from the Calculator's own icon font, whose license
-  limits it to Windows; CalcCraft uses similar Segoe Fluent Icons glyphs. The Alt hotkeys are
+  limits it to Windows; CalcCraft uses similar Segoe Fluent Icons glyphs. The mode hotkeys are
   `FEAT-SHELL-010`.
 
 #### `FEAT-SHELL-002` Adaptive Layouts (docked panels)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-SHELL-001`
 - **Windows ref:** `docs/ApplicationArchitecture.md` (VisualStates), `src/Calculator/Views/Calculator.xaml`
+  (`DockVisible`, `DockPanelTemplate`, the `MemoryPanel` columns), `src/Calculator/App.xaml` (`AppMinWindowWidth`)
+- **Rust:** `src/app.rs` (`DOCK_WIDTH`, `draw_dock`, `draw_list`, `draw_memory_row`, `MIN_SIZE`, `set_compact`)
 - **Description:** Layouts for small and wide windows.
 - **Acceptance Criteria:**
-  - In wide windows, history and memory dock in a side panel with tabs (`FEAT-STD-003` uses flyouts only).
+  - From 560 px wide, Standard mode docks history and memory in a side panel: History and Memory
+    tabs (14 px, 48 px high, a 16 × 3 px accent pipe under the selected one) over the same lists
+    as the flyouts. The panel takes 240 of every 560 px, up to 320 px; the header's history
+    button and `M˅` are hidden, `Ctrl+H` does nothing, and the panel opens on the list whose
+    flyout was opened last. An open flyout becomes the docked tab.
+  - The memory buttons are at most 80 px wide; a spacer before `M˅` takes the rest.
   - Converters switch between vertical and horizontal layouts.
-  - Nothing clips or overlaps at the minimum window size.
-- **Already there:** the keypad and fonts scale with the window, the date page switches result
-  sizes at 480 px, and the converters switch to the horizontal layout in landscape windows and to
-  larger sizes from 640 px.
+  - Nothing clips or overlaps at the minimum window size, Windows' 320 × 500. Keep-on-top mode
+    (320 × 394) lowers the minimum while it's on.
+- **Also:** the keypad and fonts scale with the window, the date page switches result sizes at
+  480 px, and the converters switch to the horizontal layout in landscape windows and to larger
+  sizes from 640 px.
+- **Differences:** the docked panel has no background of its own (Windows shows Mica through it),
+  and its tabs take the keyboard focus (Windows' Pivot headers don't).
 
 #### `FEAT-SHELL-003` App Theme & Color Palettes
 - **Status:** `[x] COMPLETED`
@@ -839,50 +852,99 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
   so its order is undefined; CalcCraft sorts by the absolute value.
 
 #### `FEAT-SHELL-005` Keyboard Focus Navigation
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-SHELL-001`
-- **Windows ref:** `docs/ManualTests.md`
+- **Windows ref:** `docs/ManualTests.md`, `src/Calculator/Controls/CalculatorButton.cs` (`OnKeyDown`
+  ignores Enter), `CalculatorStandardOperators.xaml` (`XYFocusKeyboardNavigation`)
+- **Rust:** `src/app/access.rs` (`control`, `focus_ring`, `set_covered`), `src/app.rs`
+  (`handle_key`, `is_calculator_key`, `opened_from`, `take_popup_focus`, `focus_return`)
 - **Description:** `Tab`, `Shift+Tab` and arrow keys move focus through buttons, menus, lists, the calendar and Settings.
 - **Acceptance Criteria:**
-  - Visible focus rings and a logical tab order in every mode.
-- **Rust notes:** buttons are deliberately not focusable today, so `Enter` always means `=`
-  (AGENTS.md pitfalls). Focus navigation must keep that: `Enter` on the keypad is still `=`.
+  - Every control is reachable; `Tab` goes in drawing order and the arrows to the nearest control
+    in their direction. The focused control has WinUI's focus visual (2 px outer and 1 px inner
+    ring, 3 px outside) and scrolls into view.
+  - `Space` and `Enter` press the focused control, but `Enter` stays `=` on the keypad and the
+    memory row, as with Windows' `CalculatorButton`. `Esc` is still `C` and keeps the focus.
+  - Popups keep the focus inside. Opened with the keyboard, the menu, the drop-downs, the
+    calendar and the history and memory flyouts focus their selected item, and the opener gets
+    the focus back when they close. `Page Up` and `Page Down` flip calendar pages.
+  - With the menu or a context menu open, the calculator's keys do nothing, as in Windows.
+- **Differences:** the tab order follows the drawing order rather than Windows' `TabIndex`
+  values (the memory row comes before the docked panel). Context menus open only with the mouse.
 
 #### `FEAT-SHELL-006` Screen Reader Support (Narrator)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-SHELL-001`
-- **Windows ref:** `docs/ManualTests.md` (Ease of Access), `AutomationProperties` in the XAML views
+- **Windows ref:** `docs/ManualTests.md` (Ease of Access), `AutomationProperties` in the XAML views,
+  `Resources.resw` (`Format_CalculatorResults`, `Format_ValueFrom`, …)
+- **Rust:** `src/app/access.rs` (`button`, `item`, `combo_box`, `text`), the names in `src/app.rs`
+  (`command_name`) and the views
 - **Description:** Names and live regions for every control and result.
 - **Acceptance Criteria:**
   - Narrator reads results and button names (`±` as "positive negative").
-- **Rust notes:** eframe ships with AccessKit, but the hand-painted controls register no names.
-  Give each control `Response::widget_info` with a label.
+  - Every control has Windows' `AutomationProperties.Name` in the interface language: the keys,
+    the memory buttons, "Open history flyout", "Standard Calculator" in the menu, "From" for a
+    date picker, "Convert from 5 Kilometers" for a converter value, and so on. Drop-downs report
+    their value, and tabs, list items and radio buttons whether they're selected.
+  - The display ("Display is 7", "Display is 5 point" while typing a decimal point), the date
+    results ("Difference 1 week", "Resulting date …") and the converted value are live regions
+    that Narrator reads when they change.
+- **Differences:** Windows announces results with UI Automation notifications (and some events,
+  like "Memory cleared", have their own); CalcCraft uses live regions through AccessKit and has
+  no event announcements. The expression line is read as it's shown, not as Windows' spoken
+  tokens. The menu button and the calendar arrows have English names, since Windows takes them
+  from WinUI.
 
-#### `FEAT-SHELL-007` Localization & Right-to-Left Support
-- **Status:** `[ ] NOT_STARTED`
+#### `FEAT-SHELL-007` Localization & Regional Formats
+- **Status:** `[x] COMPLETED` (left-to-right scripts)
 - **Priority:** `P2`
 - **Depends On:** `FEAT-SHELL-001`
-- **Windows ref:** `src/Calculator/Resources/*/Resources.resw`, `docs/ManualTests.md` (Localization)
-- **Description:** Translated strings, mirrored layouts for right-to-left languages, regional number and date formats.
+- **Windows ref:** `src/Calculator/Resources/*/Resources.resw` and `CEngineStrings.resw`,
+  `src/Calculator.ViewModels/Common/LocalizationSettings.cs`, `src/CalcManager/CEngine/scidisp.cpp`
+  (`GroupDigits`), `src/Calculator.ViewModels/Common/CopyPasteManager.cs`, `docs/ManualTests.md` (Localization)
+- **Rust:** `tools/import-strings.ps1`, `locales/`, `src/app/strings.rs` (`tr`, `match_language`),
+  `src/locale.rs` (`NumberFormat`, `without_weekday`), `src/app/region.rs` (`Formats`), `src/dates.rs` (`Words`)
+- **Description:** Translated strings and regional number and date formats.
 - **Acceptance Criteria:**
-  - Decimal and grouping separators and date formats follow the system region.
-  - Right-to-left layouts mirror without overflow.
-- **Rust notes:** today everything is English with en-US formats: number formatting in
-  `engine.rs` (`format_with`, `format_input`), date formats in `dates.rs`.
+  - The interface uses the Windows Calculator's translations (60 languages, all 442 strings
+    CalcCraft shows, unit names included) and follows the Windows display languages, matched like
+    Windows' resource lookup (`de-AT` → `de-DE`, `es-AR` → `es-MX`, `zh-Hant` → `zh-TW`).
+  - Decimal and grouping separators and date formats follow the system region (the user locale,
+    including changes made in Settings): see "Regional formats" in AGENTS.md.
+  - Japanese, Chinese, Korean, Thai and Amharic load a Windows font with their script.
+  - Settings can pick another language and regional format for CalcCraft alone
+    (`FEAT-SHELL-008`); "Use system setting" follows Windows, or `CALCCRAFT_LANGUAGE` and
+    `CALCCRAFT_REGION` where they're set.
+- **Differences:** right-to-left and complex scripts are `FEAT-SHELL-011`. Numbers always use
+  Western digits, and dates the Gregorian calendar. The contribute sentence in Settings stays
+  English (its translations name the Windows Calculator). Pasted text loses its group separators
+  before the decimal separator becomes `.`; Windows does it the other way round, which drops the
+  decimal point where the group separator is `.` (`1,5` pastes as `15` with German formats).
 
 #### `FEAT-SHELL-008` Settings Page
 - **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-SHELL-001`
 - **Windows ref:** `src/Calculator/Views/Settings.xaml`
-- **Rust:** `src/app.rs` (`draw_settings`, `settings_content`)
+- **Rust:** `src/app.rs` (`draw_settings`, `settings_content`, `ComboCard`, `draw_combo_card`,
+  `draw_settings_list`), `src/app/region.rs` (`regions`, `native_name`)
 - **Description:** Opened from the bottom of the menu; replaces the current mode until you go back (`Esc` or the back button).
 - **Acceptance Criteria:**
-  - Appearance: the expandable App theme card (`FEAT-SHELL-003`).
+  - Appearance: the expandable App theme card (`FEAT-SHELL-003`), then a Language and a Regional
+    format card with a drop-down each, like WinUI's `SettingsCard` with a `ComboBox`: the box sits
+    right of the text, or under it in cards narrower than 476 px.
+  - The lists start with "Use system setting", then the 50 languages or Windows' regional
+    formats (those egui can draw that use the Gregorian calendar) by their own names
+    (`Deutsch (Schweiz)`), sorted. Typing the first letters jumps to a name. The Regional format
+    card shows an example in the chosen format (`1’234’567.89 · 15. Oktober 2026`).
+  - A choice applies at once and is saved as `CalcCraftLanguage` / `CalcCraftRegionalFormat`.
   - About: icon, name and version; "Send feedback" and GitHub links.
-- **Differences:** no license or privacy statement links in About.
+- **Differences:** no license or privacy statement links in About. `Esc` goes back; Windows
+  ignores it on this page. Windows has no Language and Regional format settings (it follows
+  Windows'), so their labels are CalcCraft's own translations (`locales/calccraft.txt`), not
+  Microsoft's.
 
 #### `FEAT-SHELL-009` App Identity (icons, title bar)
 - **Status:** `[x] COMPLETED`
@@ -898,13 +960,34 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
   the system title bar and only recolors it.
 
 #### `FEAT-SHELL-010` Mode Hotkeys (Alt+1 … Alt+5)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED` (for the implemented modes)
 - **Priority:** `P2`
 - **Depends On:** `FEAT-SHELL-001`
-- **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs` (`VirtualKey`)
-- **Description:** `Alt+1` Standard, `Alt+2` Scientific, `Alt+3` Graphing, `Alt+4` Programmer, `Alt+5` Date calculation.
+- **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs` (`VirtualKey`),
+  `src/Calculator/Common/KeyboardShortcutManager.cs` (`OnAcceleratorKeyActivated`, `CanNavigateModeByShortcut`, Ctrl+E)
+- **Rust:** `src/app.rs` (`Mode::for_alt_key`, `take_mode_shortcut`, `handle_mode_keys`)
+- **Description:** `Alt+1` Standard, `Alt+2` Scientific, `Alt+3` Graphing, `Alt+4` Programmer,
+  `Alt+5` Date calculation, and `Ctrl+E` Date calculation too. The converters have none.
 - **Acceptance Criteria:**
-  - Keys of modes that don't exist yet do nothing; `Alt+1` and `Alt+5` work today.
+  - Keys of modes that don't exist yet do nothing; `Alt+1`, `Alt+5` and `Ctrl+E` work today.
+  - As in Windows, they do nothing in keep-on-top mode, on the Settings page or with `AltGr`
+    (`Ctrl+Alt`), and they work with a menu or flyout open. The digit isn't typed.
+- **Differences:** Windows switches when the key is released, CalcCraft when it's pressed.
+
+#### `FEAT-SHELL-011` Right-to-Left and Complex Scripts
+- **Status:** `[-] BLOCKED` (egui's text layout)
+- **Priority:** `P3`
+- **Depends On:** `FEAT-SHELL-007`
+- **Windows ref:** `src/Calculator/App.xaml.cs` (`FlowDirection`), `LocalizationSettings.cs` (`GetFlowDirection`)
+- **Description:** Arabic, Persian and Hebrew with a mirrored interface (the display, numbers and
+  keypads stay left to right, as in Windows), and the scripts that need shaping: Arabic, Hindi,
+  Kannada, Malayalam, Tamil, Telugu, Khmer and Lao. Native digits where the region uses them.
+- **Acceptance Criteria:**
+  - Right-to-left layouts mirror without overflow.
+  - Text in these scripts is shaped and ordered correctly.
+- **Blocked by:** egui 0.36 lays out text glyph by glyph, with neither the bidirectional algorithm
+  nor shaping (`epaint`'s text layout has a TODO for both). The strings are imported already;
+  `strings::UNSUPPORTED` keeps these languages out until egui can draw them.
 
 ---
 
@@ -933,3 +1016,5 @@ Windows source in `../win-calculator`.
 | 2026-10-15 | Claude Code | `FEAT-CORE-003`, `FEAT-CORE-004`, `FEAT-STD-007` | Ported `CCalcEngine` and `CHistoryCollector` to `src/engine.rs` with the precedence flag (operator precedence, parentheses, precedence inversion brackets), completing `FEAT-CORE-005` and `FEAT-CORE-007` for precedence mode; added Windows' paste validation and key-by-key expression paste, and the history and memory context menus |
 | 2026-10-15 | Claude Code | `FEAT-CONV-001`–`FEAT-CONV-013` | Added the 12 offline unit converters: `src/converter.rs` ports `UnitConverter`, the units, factors and region defaults of `UnitConverterDataLoader.cs` and the field logic of `UnitConverterViewModel.cs`; `src/app/converter_view.rs` draws `UnitConverter.xaml` (portrait and landscape). Updated `FEAT-SHELL-001` (Converter menu group) and `FEAT-SHELL-002`; Currency (`FEAT-CONV-014`) stays open |
 | 2026-10-15 | Claude Code | `FEAT-SHELL-004` | Added the converters' "About equal to" results: `Converter::suggestions` ports `CalculateSuggested` with the everyday comparison units of `UnitConverterDataLoader.cs`, and `draw_suggestions` lays them out like `SupplementaryResults.xaml` and `HorizontalNoOverflowStackPanel` |
+| 2026-10-15 | Claude Code | `FEAT-SHELL-002`, `-005`, `-006`, `-007`, `-010`, `-011` | Finished Phase 8: the docked history and memory panel and Windows' 320 × 500 minimum size; `Alt+1`, `Alt+5` and `Ctrl+E`; keyboard focus with focus visuals and screen reader names for every control (`src/app/access.rs`); the Windows Calculator's translations in 60 languages (`tools/import-strings.ps1`, `locales/`) and the regional number and date formats (`src/locale.rs`, `src/app/region.rs`). Split right-to-left and complex scripts into `FEAT-SHELL-011`, blocked by egui's text layout |
+| 2026-10-15 | Claude Code | `FEAT-SHELL-007`, `FEAT-SHELL-008` | Added the Language and Regional format settings: drop-down cards in Appearance that switch the language and the formats at runtime and save them, with names in their own scripts, type-ahead, and CalcCraft's own translations of their labels (`locales/calccraft.txt`) |

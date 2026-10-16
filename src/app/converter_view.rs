@@ -4,14 +4,15 @@
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, Context, Event, FontFamily, FontId, Galley, Id, Key, Rect, Sense, Ui, UiBuilder, pos2,
-    text::LayoutJob, vec2,
+    self, Context, Event, FontFamily, FontId, Galley, Id, Key, Modifiers, Rect, Sense, Ui,
+    UiBuilder, WidgetInfo, WidgetType, pos2, text::LayoutJob, vec2,
 };
 
 use super::date_view::{list_item, popup_frame};
+use super::strings::{tr, tr_format, unit_abbreviation, unit_name};
 use super::{
-    CalculatorApp, Flyout, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, KEY_FLASH, Kind, MARGIN, icons,
-    layout_elided_left, light, negate_label, semibold, symbols, text,
+    CalculatorApp, Flyout, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, KEY_FLASH, Kind, MARGIN, RADIUS,
+    access, icons, layout_elided_left, light, negate_label, numbers, semibold, symbols, text,
 };
 use crate::converter::{Converter, ConverterCommand, Region};
 
@@ -58,6 +59,10 @@ impl ConverterState {
     pub(super) fn close_popup(&mut self) -> bool {
         self.popup.take().is_some()
     }
+
+    pub(super) fn popup_open(&self) -> bool {
+        self.popup.is_some()
+    }
 }
 
 /// The user's region (Windows Settings → Time & language → Language & region), which
@@ -75,6 +80,34 @@ fn user_region() -> String {
         }
     }
     "US".to_string()
+}
+
+fn unit_picker_id(top: bool) -> Id {
+    Id::new("converter-unit").with(top)
+}
+
+fn is_converter_key(id: Id) -> bool {
+    (0..15).any(|i| id == Id::new("converter-key").with(i))
+}
+
+/// The name a screen reader gives a key of the converter's keypad.
+fn command_name(command: ConverterCommand) -> &'static str {
+    tr(match command {
+        ConverterCommand::Digit(0) => "num0Button.AutomationName",
+        ConverterCommand::Digit(1) => "num1Button.AutomationName",
+        ConverterCommand::Digit(2) => "num2Button.AutomationName",
+        ConverterCommand::Digit(3) => "num3Button.AutomationName",
+        ConverterCommand::Digit(4) => "num4Button.AutomationName",
+        ConverterCommand::Digit(5) => "num5Button.AutomationName",
+        ConverterCommand::Digit(6) => "num6Button.AutomationName",
+        ConverterCommand::Digit(7) => "num7Button.AutomationName",
+        ConverterCommand::Digit(8) => "num8Button.AutomationName",
+        ConverterCommand::Digit(_) => "num9Button.AutomationName",
+        ConverterCommand::Decimal => "decimalSeparatorButton.AutomationName",
+        ConverterCommand::Clear => "clearEntryButton.AutomationName",
+        ConverterCommand::Backspace => "backSpaceButton.AutomationName",
+        ConverterCommand::Negate => "converterNegateButton.AutomationName",
+    })
 }
 
 /// The command a typed character stands for.
@@ -163,6 +196,11 @@ impl CalculatorApp {
                             self.flyout = Flyout::None;
                             continue;
                         }
+                        // The keypad's keys ignore Enter, as Windows' `CalculatorButton`s do.
+                        Key::Enter if access::focused(ctx).is_some_and(is_converter_key) => {
+                            ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                            continue;
+                        }
                         Key::Backspace => ConverterCommand::Backspace,
                         Key::Delete => ConverterCommand::Clear,
                         Key::F9 => ConverterCommand::Negate,
@@ -170,9 +208,11 @@ impl CalculatorApp {
                     };
                     self.converter_press(command, now);
                 }
-                Event::Copy => ctx.copy_text(self.converter.converter.copy_text()),
+                Event::Copy => {
+                    ctx.copy_text(numbers().localize_plain(&self.converter.converter.copy_text()))
+                }
                 Event::Paste(text) => {
-                    self.converter.converter.paste(&text);
+                    self.converter.converter.paste(&numbers().delocalize(&text));
                 }
                 _ => {}
             }
@@ -264,6 +304,7 @@ impl CalculatorApp {
                     anchor,
                     scroll_pending: true,
                 });
+                self.opened_from(ui.ctx(), unit_picker_id(top));
             }
         }
 
@@ -291,10 +332,12 @@ impl CalculatorApp {
     fn draw_value(&mut self, ui: &Ui, rect: Rect, top: bool, max_font: f32, margin: f32) {
         let p = self.palette;
         let converter = &self.converter.converter;
-        let value = if top {
-            converter.value1()
+        let value = if converter.has_paste_error() {
+            tr("CEngine.100").to_string()
+        } else if top {
+            numbers().localize(&converter.value1())
         } else {
-            converter.value2()
+            numbers().localize(&converter.value2())
         };
         let active = converter.value1_active() == top;
         let family = if active { semibold() } else { light() };
@@ -316,8 +359,29 @@ impl CalculatorApp {
         let pos = pos2(left, rect.bottom() - margin - galley.size().y);
         painter.galley(pos, galley, p.text);
 
+        // "Convert from 5 Kilometers", "Converts into 3.106856 Miles"; like Windows, screen
+        // readers read the bottom value out when it changes.
+        let unit = if top {
+            converter.unit1()
+        } else {
+            converter.unit2()
+        };
+        let unit = unit_name(converter.units()[unit].key);
+        let format = if top {
+            "Format_ValueFrom"
+        } else {
+            "Format_ValueTo"
+        };
+        let name = tr_format(format, &[&value, unit]);
         let id = Id::new("converter-value").with(top);
-        if ui.interact(rect, id, Sense::CLICK).clicked() {
+        let info = || WidgetInfo::labeled(WidgetType::Button, true, &name);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
+        if !top {
+            ui.ctx().accesskit_node_builder(id, |node| {
+                node.set_live(egui::accesskit::Live::Polite);
+            });
+        }
+        if response.clicked() {
             self.converter.converter.activate(top);
         }
     }
@@ -332,7 +396,7 @@ impl CalculatorApp {
         } else {
             converter.unit2()
         };
-        let name = converter.units()[index].name;
+        let name = unit_name(converter.units()[index].key);
         let painter = ui.painter();
         let label = painter.layout_no_wrap(name.to_string(), FontId::proportional(14.0), p.text);
         let chevron = painter.layout_job(if self.has_icons {
@@ -344,7 +408,14 @@ impl CalculatorApp {
         let width = 4.0 + label.size().x + 8.0 + chevron.size().x + 12.0;
         let rect = Rect::from_min_size(pos2(row.left() + 12.0, row.top()), vec2(width, height));
 
-        let response = ui.interact(rect, Id::new("converter-unit").with(top), Sense::CLICK);
+        let picker = if top {
+            tr("InputUnit_Name")
+        } else {
+            tr("OutputUnit_Name")
+        };
+        let info = access::combo_box(picker, name);
+        let id = unit_picker_id(top);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
         let color = if response.is_pointer_button_down_on() {
             p.unit_pressed
         } else if response.hovered() {
@@ -378,6 +449,8 @@ impl CalculatorApp {
             value: Arc<Galley>,
             unit: Arc<Galley>,
             width: f32,
+            /// What a screen reader says: the value and the unit's full name.
+            name: String,
         }
 
         let p = self.palette;
@@ -387,7 +460,7 @@ impl CalculatorApp {
         }
         let painter = ui.painter();
         let caption = painter.layout_no_wrap(
-            "About equal to".to_string(),
+            tr("SupplementaryResultsHeader.Text").to_string(),
             FontId::proportional(12.0),
             p.text_secondary,
         );
@@ -403,12 +476,17 @@ impl CalculatorApp {
         let items: Vec<Item> = suggestions
             .iter()
             .map(|s| {
+                let shown = numbers().localize(&s.value);
                 let value =
-                    painter.layout_no_wrap(s.value.clone(), FontId::new(14.0, semibold()), p.text);
+                    painter.layout_no_wrap(shown.clone(), FontId::new(14.0, semibold()), p.text);
                 let unit = painter.layout_no_wrap(
-                    s.abbreviation.to_string(),
+                    unit_abbreviation(s.key).to_string(),
                     FontId::proportional(14.0),
                     p.text_secondary,
+                );
+                let name = tr_format(
+                    "SupplementaryUnit_AutomationName",
+                    &[&shown, unit_name(s.key)],
                 );
                 let texts = value.size().x + 4.0 + unit.size().x;
                 match s.glyph {
@@ -418,6 +496,7 @@ impl CalculatorApp {
                         width: 16.0 + texts + 16.0,
                         value,
                         unit,
+                        name,
                     },
                     // The picture, its own gap, and the value 2 px closer.
                     Some((glyph, gap)) => {
@@ -431,6 +510,7 @@ impl CalculatorApp {
                             glyph: Some((glyph, gap)),
                             value,
                             unit,
+                            name,
                         }
                     }
                 }
@@ -455,6 +535,8 @@ impl CalculatorApp {
             if room <= 0.0 || item.width > room {
                 continue;
             }
+            let rect = Rect::from_min_max(pos2(x, bottom - 24.0), pos2(x + item.width, bottom));
+            access::text(ui, rect, Id::new("suggestion").with(i), &item.name, false);
             let mut left = x;
             if let Some((glyph, gap)) = item.glyph {
                 // `Margin="0,3,…,-3"`: the picture sits 3 px lower.
@@ -488,6 +570,7 @@ impl CalculatorApp {
             converter.unit2()
         };
         let backdrop = ui.interact(full, Id::new("converter-backdrop"), Sense::CLICK);
+        access::set_covered(ui.ctx(), false);
 
         let fits = ((full.height() - 16.0) / LIST_ITEM_HEIGHT).floor() as usize;
         let visible = units.len().min(LIST_VISIBLE_ITEMS).min(fits).max(1);
@@ -496,7 +579,11 @@ impl CalculatorApp {
             .iter()
             .map(|unit| {
                 ui.painter()
-                    .layout_no_wrap(unit.name.to_string(), FontId::proportional(14.0), p.text)
+                    .layout_no_wrap(
+                        unit_name(unit.key).to_string(),
+                        FontId::proportional(14.0),
+                        p.text,
+                    )
                     .size()
                     .x
             })
@@ -540,7 +627,9 @@ impl CalculatorApp {
                     let (row, _) = ui.allocate_exact_size(size, Sense::hover());
                     let item = row.shrink2(vec2(0.0, 2.0));
                     let id = Id::new("converter-unit-item").with(index);
-                    if list_item(p, ui, id, item, units[index].name, index == selected) {
+                    let name = unit_name(units[index].key);
+                    let focus = self.take_popup_focus(index == selected);
+                    if list_item(p, ui, id, item, name, index == selected, focus) {
                         chosen = Some(index);
                     }
                 }
@@ -613,7 +702,8 @@ impl CalculatorApp {
             let flash =
                 matches!(self.converter.flash, Some((c, t)) if c == command && now - t < KEY_FLASH);
             let id = Id::new("converter-key").with(i);
-            if self.button_flash(ui, cell, id, kind, true, label, flash)
+            let name = command_name(command);
+            if self.button_flash(ui, cell, id, kind, true, label, name, flash)
                 // Like Windows, CE does nothing while a drop-down is open.
                 && !(command == Clear && self.converter.popup.is_some())
             {

@@ -35,6 +35,8 @@ pub(super) struct Palette {
     pub text: Color32,
     pub text_pressed: Color32,
     pub text_secondary: Color32,
+    /// WinUI's tertiary text: the docked panel's tab headers while pressed.
+    pub text_tertiary: Color32,
     pub text_disabled: Color32,
     pub text_on_accent: Color32,
     /// Cards on the Settings page.
@@ -71,6 +73,10 @@ pub(super) struct Palette {
     /// (WinUI's BaseMediumHigh and BaseMedium: text at 80 % and 60 %).
     pub unit_hover: Color32,
     pub unit_pressed: Color32,
+    /// The focus visual's outer and inner rings (WinUI's `FocusStrokeColorOuter` and
+    /// `FocusStrokeColorInner`), drawn over the page.
+    pub focus_outer: Color32,
+    pub focus_inner: Color32,
 }
 
 /// `color` at `opacity` over `base`, as an opaque color.
@@ -126,6 +132,7 @@ pub(super) const DARK: Palette = Palette {
     text: Color32::WHITE,
     text_pressed: Color32::from_rgb(0xCF, 0xC8, 0xCF),
     text_secondary: Color32::from_rgb(0xC5, 0xBE, 0xC5),
+    text_tertiary: white(DARK_BACKGROUND, 0.53),
     text_disabled: Color32::from_rgb(0x6C, 0x62, 0x6D),
     text_on_accent: Color32::from_rgb(0x1A, 0x0F, 0x1B),
     card: Color32::from_rgb(0x34, 0x26, 0x35),
@@ -158,6 +165,8 @@ pub(super) const DARK: Palette = Palette {
     control_border: Color32::from_rgb(0x44, 0x36, 0x44),
     unit_hover: white(DARK_BACKGROUND, 0.8),
     unit_pressed: white(DARK_BACKGROUND, 0.6),
+    focus_outer: Color32::WHITE,
+    focus_inner: Color32::from_black_alpha(0xB3),
 };
 
 pub(super) const LIGHT: Palette = Palette {
@@ -183,6 +192,7 @@ pub(super) const LIGHT: Palette = Palette {
     text: Color32::BLACK,
     text_pressed: black(LIGHT_BACKGROUND, 0.6063),
     text_secondary: black(LIGHT_BACKGROUND, 0.6063),
+    text_tertiary: black(LIGHT_BACKGROUND, 0.4471),
     text_disabled: black(LIGHT_BACKGROUND, 0.3614),
     text_on_accent: Color32::WHITE,
     card: white(LIGHT_BACKGROUND, 0.7),
@@ -215,6 +225,9 @@ pub(super) const LIGHT: Palette = Palette {
     control_border: black(LIGHT_BACKGROUND, 0.0578),
     unit_hover: black(LIGHT_BACKGROUND, 0.8),
     unit_pressed: black(LIGHT_BACKGROUND, 0.6),
+    focus_outer: Color32::from_black_alpha(0xE4),
+    // White at 70 %, premultiplied.
+    focus_inner: Color32::from_rgba_premultiplied(0xB3, 0xB3, 0xB3, 0xB3),
 };
 
 #[cfg(test)]

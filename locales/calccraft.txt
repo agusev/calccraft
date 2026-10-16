@@ -1,0 +1,255 @@
+# CalcCraft's own strings: the ones the Windows Calculator doesn't have, because it has no
+# such settings. They were translated for CalcCraft, not by Microsoft, so unlike the other
+# files in this folder they are edited here by hand. Each [language] section has the same keys
+# as en-US; the descriptions follow the wording of Windows' own "Select which app theme to
+# display" in that language (AppThemeExpander.Description).
+
+[en-US]
+CalcCraft.Language=Language
+CalcCraft.LanguageDescription=Select which language to display
+CalcCraft.RegionalFormat=Regional format
+
+[en-GB]
+CalcCraft.Language=Language
+CalcCraft.LanguageDescription=Select which language to display
+CalcCraft.RegionalFormat=Regional format
+
+[af-ZA]
+CalcCraft.Language=Taal
+CalcCraft.LanguageDescription=Kies watter taal om te vertoon
+CalcCraft.RegionalFormat=Streekformaat
+
+[am-ET]
+CalcCraft.Language=ቋንቋ
+CalcCraft.LanguageDescription=የትኛው ቋንቋ ለእይታ እንደሚቀርብ ይምረጡ
+CalcCraft.RegionalFormat=ክልላዊ ቅርጸት
+
+[az-Latn-AZ]
+CalcCraft.Language=Dil
+CalcCraft.LanguageDescription=Göstəriləcək dili seçin
+CalcCraft.RegionalFormat=Regional format
+
+[bg-BG]
+CalcCraft.Language=Език
+CalcCraft.LanguageDescription=Изберете кой език да се показва
+CalcCraft.RegionalFormat=Регионален формат
+
+[ca-ES]
+CalcCraft.Language=Idioma
+CalcCraft.LanguageDescription=Selecciona l'idioma que vols que es mostri.
+CalcCraft.RegionalFormat=Format regional
+
+[cs-CZ]
+CalcCraft.Language=Jazyk
+CalcCraft.LanguageDescription=Vyberte jazyk, který se má zobrazit.
+CalcCraft.RegionalFormat=Místní formát
+
+[da-DK]
+CalcCraft.Language=Sprog
+CalcCraft.LanguageDescription=Vælg, hvilket sprog der skal vises
+CalcCraft.RegionalFormat=Områdeformat
+
+[de-DE]
+CalcCraft.Language=Sprache
+CalcCraft.LanguageDescription=Auswählen der anzuzeigenden Sprache
+CalcCraft.RegionalFormat=Regionales Format
+
+[el-GR]
+CalcCraft.Language=Γλώσσα
+CalcCraft.LanguageDescription=Επιλέξτε τη γλώσσα που θα εμφανίζεται
+CalcCraft.RegionalFormat=Μορφή περιοχής
+
+[es-ES]
+CalcCraft.Language=Idioma
+CalcCraft.LanguageDescription=Seleccionar el idioma que se va a mostrar
+CalcCraft.RegionalFormat=Formato regional
+
+[es-MX]
+CalcCraft.Language=Idioma
+CalcCraft.LanguageDescription=Seleccionar el idioma para mostrar
+CalcCraft.RegionalFormat=Formato regional
+
+[et-EE]
+CalcCraft.Language=Keel
+CalcCraft.LanguageDescription=Valige kuvatav keel
+CalcCraft.RegionalFormat=Piirkondlik vorming
+
+[eu-ES]
+CalcCraft.Language=Hizkuntza
+CalcCraft.LanguageDescription=Hautatu bistaratu beharreko hizkuntza
+CalcCraft.RegionalFormat=Eskualdeko formatua
+
+[fi-FI]
+CalcCraft.Language=Kieli
+CalcCraft.LanguageDescription=Valitse näytettävä kieli
+CalcCraft.RegionalFormat=Alueellinen muoto
+
+[fil-PH]
+CalcCraft.Language=Wika
+CalcCraft.LanguageDescription=Piliin kung aling wika ang ipapakita
+CalcCraft.RegionalFormat=Format ng rehiyon
+
+[fr-CA]
+CalcCraft.Language=Langue
+CalcCraft.LanguageDescription=Sélectionner la langue de l’appli
+CalcCraft.RegionalFormat=Format régional
+
+[fr-FR]
+CalcCraft.Language=Langue
+CalcCraft.LanguageDescription=Sélectionner la langue de l’application
+CalcCraft.RegionalFormat=Format régional
+
+[gl-ES]
+CalcCraft.Language=Idioma
+CalcCraft.LanguageDescription=Seleccionar que idioma se vai mostrar
+CalcCraft.RegionalFormat=Formato rexional
+
+[hr-HR]
+CalcCraft.Language=Jezik
+CalcCraft.LanguageDescription=Odaberite jezik koji će se prikazati
+CalcCraft.RegionalFormat=Regionalni format
+
+[hu-HU]
+CalcCraft.Language=Nyelv
+CalcCraft.LanguageDescription=Válassza ki a megjelenítendő nyelvet
+CalcCraft.RegionalFormat=Területi formátum
+
+[id-ID]
+CalcCraft.Language=Bahasa
+CalcCraft.LanguageDescription=Pilih bahasa yang akan ditampilkan
+CalcCraft.RegionalFormat=Format regional
+
+[is-IS]
+CalcCraft.Language=Tungumál
+CalcCraft.LanguageDescription=Velja hvaða tungumál á að birta
+CalcCraft.RegionalFormat=Svæðissnið
+
+[it-IT]
+CalcCraft.Language=Lingua
+CalcCraft.LanguageDescription=Seleziona la lingua da mostrare
+CalcCraft.RegionalFormat=Formato regionale
+
+[ja-JP]
+CalcCraft.Language=言語
+CalcCraft.LanguageDescription=表示する言語を選択します
+CalcCraft.RegionalFormat=地域設定
+
+[kk-KZ]
+CalcCraft.Language=Тіл
+CalcCraft.LanguageDescription=Көрсетілетін тілді таңдау
+CalcCraft.RegionalFormat=Аймақтық пішім
+
+[ko-KR]
+CalcCraft.Language=언어
+CalcCraft.LanguageDescription=표시할 언어 선택
+CalcCraft.RegionalFormat=국가별 형식
+
+[lt-LT]
+CalcCraft.Language=Kalba
+CalcCraft.LanguageDescription=Pasirinkite, kurią kalbą rodyti
+CalcCraft.RegionalFormat=Regiono formatas
+
+[lv-LV]
+CalcCraft.Language=Valoda
+CalcCraft.LanguageDescription=Atlasiet, kuru valodu rādīt
+CalcCraft.RegionalFormat=Reģionālais formāts
+
+[mk-MK]
+CalcCraft.Language=Јазик
+CalcCraft.LanguageDescription=Изберете кој јазик да се прикажува
+CalcCraft.RegionalFormat=Регионален формат
+
+[ms-MY]
+CalcCraft.Language=Bahasa
+CalcCraft.LanguageDescription=Pilih bahasa untuk dipaparkan
+CalcCraft.RegionalFormat=Format serantau
+
+[nb-NO]
+CalcCraft.Language=Språk
+CalcCraft.LanguageDescription=Velg hvilket språk som skal vises
+CalcCraft.RegionalFormat=Regionalt format
+
+[nl-NL]
+CalcCraft.Language=Taal
+CalcCraft.LanguageDescription=Selecteer welke taal moet worden weergegeven
+CalcCraft.RegionalFormat=Landinstellingen
+
+[pl-PL]
+CalcCraft.Language=Język
+CalcCraft.LanguageDescription=Wybierz język do wyświetlenia
+CalcCraft.RegionalFormat=Format regionalny
+
+[pt-BR]
+CalcCraft.Language=Idioma
+CalcCraft.LanguageDescription=Selecionar o idioma a ser exibido
+CalcCraft.RegionalFormat=Formato regional
+
+[pt-PT]
+CalcCraft.Language=Idioma
+CalcCraft.LanguageDescription=Selecionar o idioma a apresentar
+CalcCraft.RegionalFormat=Formato regional
+
+[ro-RO]
+CalcCraft.Language=Limbă
+CalcCraft.LanguageDescription=Selectați ce limbă să afișați
+CalcCraft.RegionalFormat=Format regional
+
+[ru-RU]
+CalcCraft.Language=Язык
+CalcCraft.LanguageDescription=Выберите язык для отображения
+CalcCraft.RegionalFormat=Региональный формат
+
+[sk-SK]
+CalcCraft.Language=Jazyk
+CalcCraft.LanguageDescription=Vyberte, ktorý jazyk sa má zobraziť
+CalcCraft.RegionalFormat=Miestny formát
+
+[sl-SI]
+CalcCraft.Language=Jezik
+CalcCraft.LanguageDescription=Izberite jezik za prikaz
+CalcCraft.RegionalFormat=Regionalna oblika
+
+[sq-AL]
+CalcCraft.Language=Gjuha
+CalcCraft.LanguageDescription=Zgjidh gjuhën për t'u shfaqur
+CalcCraft.RegionalFormat=Formati rajonal
+
+[sr-Latn-RS]
+CalcCraft.Language=Jezik
+CalcCraft.LanguageDescription=Izaberite jezik koji želite da prikažete
+CalcCraft.RegionalFormat=Regionalni format
+
+[sv-SE]
+CalcCraft.Language=Språk
+CalcCraft.LanguageDescription=Välj vilket språk som ska visas
+CalcCraft.RegionalFormat=Regionalt format
+
+[th-TH]
+CalcCraft.Language=ภาษา
+CalcCraft.LanguageDescription=เลือกภาษาที่จะแสดง
+CalcCraft.RegionalFormat=รูปแบบภูมิภาค
+
+[tr-TR]
+CalcCraft.Language=Dil
+CalcCraft.LanguageDescription=Görüntülenecek dili seçin
+CalcCraft.RegionalFormat=Bölgesel biçim
+
+[uk-UA]
+CalcCraft.Language=Мова
+CalcCraft.LanguageDescription=Виберіть мову для відображення
+CalcCraft.RegionalFormat=Регіональний формат
+
+[vi-VN]
+CalcCraft.Language=Ngôn ngữ
+CalcCraft.LanguageDescription=Chọn ngôn ngữ để hiển thị
+CalcCraft.RegionalFormat=Định dạng khu vực
+
+[zh-CN]
+CalcCraft.Language=语言
+CalcCraft.LanguageDescription=选择要显示的语言
+CalcCraft.RegionalFormat=区域格式
+
+[zh-TW]
+CalcCraft.Language=語言
+CalcCraft.LanguageDescription=選取要顯示的語言
+CalcCraft.RegionalFormat=地區格式

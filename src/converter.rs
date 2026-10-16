@@ -136,6 +136,10 @@ impl Category {
 pub struct Unit {
     /// Windows' unit id (`UnitConverterUnits`), used in saved preferences.
     id: u16,
+    /// The unit's resource keys in Windows: `UnitName_{key}` and `UnitAbbreviation_{key}`.
+    pub key: &'static str,
+    /// The English name; the UI shows the translation of `UnitName_{key}`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub name: &'static str,
     /// The short name in the "About equal to" results.
     abbreviation: &'static str,
@@ -143,9 +147,16 @@ pub struct Unit {
     factor: f64,
 }
 
-const fn unit(id: u16, name: &'static str, abbreviation: &'static str, factor: f64) -> Unit {
+const fn unit(
+    id: u16,
+    key: &'static str,
+    name: &'static str,
+    abbreviation: &'static str,
+    factor: f64,
+) -> Unit {
     Unit {
         id,
+        key,
         name,
         abbreviation,
         factor,
@@ -156,6 +167,8 @@ const fn unit(id: u16, name: &'static str, abbreviation: &'static str, factor: f
 /// in the drop-down lists; the best one ends the "About equal to" results.
 #[derive(Clone, Copy, Debug)]
 struct Comparison {
+    /// The resource key suffix, as for `Unit::key`.
+    key: &'static str,
     abbreviation: &'static str,
     /// The picture in front of the value: a Segoe UI Symbol emoji (`DelighterUnitStyles.xaml`).
     glyph: &'static str,
@@ -165,12 +178,14 @@ struct Comparison {
 }
 
 const fn comparison(
+    key: &'static str,
     abbreviation: &'static str,
     glyph: &'static str,
     gap: f32,
     factor: f64,
 ) -> Comparison {
     Comparison {
+        key,
         abbreviation,
         glyph,
         gap,
@@ -184,64 +199,100 @@ const fn comparison(
 
 #[allow(clippy::excessive_precision)]
 const VOLUME: &[Unit] = &[
-    unit(75, "Milliliters", "mL", 1.0),
-    unit(64, "Cubic centimeters", "cm³", 1.0),
-    unit(74, "Liters", "L", 1000.0),
-    unit(67, "Cubic meters", "m³", 1000000.0),
-    unit(79, "Teaspoons (US)", "tsp. (US)", 4.92892159375),
-    unit(78, "Tablespoons (US)", "tbsp. (US)", 14.78676478125),
-    unit(71, "Fluid ounces (US)", "fl oz (US)", 29.5735295625),
-    unit(69, "Cups (US)", "cup (US)", 236.588237),
-    unit(77, "Pints (US)", "pt (US)", 473.176473),
-    unit(81, "Quarts (US)", "qt (US)", 946.352946),
-    unit(73, "Gallons (US)", "gal (US)", 3785.411784),
-    unit(66, "Cubic inches", "in³", 16.387064),
-    unit(65, "Cubic feet", "ft³", 28316.846592),
-    unit(68, "Cubic yards", "yd³", 764554.857984),
-    unit(115, "Teaspoons (UK)", "tsp. (UK)", 5.91938802083333333333),
-    unit(116, "Tablespoons (UK)", "tbsp. (UK)", 17.7581640625),
-    unit(70, "Fluid ounces (UK)", "fl oz (UK)", 28.4130625),
-    unit(76, "Pints (UK)", "pt (UK)", 568.26125),
-    unit(80, "Quarts (UK)", "qt (UK)", 1136.5225),
-    unit(72, "Gallons (UK)", "gal (UK)", 4546.09),
+    unit(75, "Milliliter", "Milliliters", "mL", 1.0),
+    unit(64, "CubicCentimeter", "Cubic centimeters", "cm³", 1.0),
+    unit(74, "Liter", "Liters", "L", 1000.0),
+    unit(67, "CubicMeter", "Cubic meters", "m³", 1000000.0),
+    unit(
+        79,
+        "TeaspoonUS",
+        "Teaspoons (US)",
+        "tsp. (US)",
+        4.92892159375,
+    ),
+    unit(
+        78,
+        "TablespoonUS",
+        "Tablespoons (US)",
+        "tbsp. (US)",
+        14.78676478125,
+    ),
+    unit(
+        71,
+        "FluidOunceUS",
+        "Fluid ounces (US)",
+        "fl oz (US)",
+        29.5735295625,
+    ),
+    unit(69, "CupUS", "Cups (US)", "cup (US)", 236.588237),
+    unit(77, "PintUS", "Pints (US)", "pt (US)", 473.176473),
+    unit(81, "QuartUS", "Quarts (US)", "qt (US)", 946.352946),
+    unit(73, "GallonUS", "Gallons (US)", "gal (US)", 3785.411784),
+    unit(66, "CubicInch", "Cubic inches", "in³", 16.387064),
+    unit(65, "CubicFoot", "Cubic feet", "ft³", 28316.846592),
+    unit(68, "CubicYard", "Cubic yards", "yd³", 764554.857984),
+    unit(
+        115,
+        "TeaspoonUK",
+        "Teaspoons (UK)",
+        "tsp. (UK)",
+        5.91938802083333333333,
+    ),
+    unit(
+        116,
+        "TablespoonUK",
+        "Tablespoons (UK)",
+        "tbsp. (UK)",
+        17.7581640625,
+    ),
+    unit(
+        70,
+        "FluidOunceUK",
+        "Fluid ounces (UK)",
+        "fl oz (UK)",
+        28.4130625,
+    ),
+    unit(76, "PintUK", "Pints (UK)", "pt (UK)", 568.26125),
+    unit(80, "QuartUK", "Quarts (UK)", "qt (UK)", 1136.5225),
+    unit(72, "GallonUK", "Gallons (UK)", "gal (UK)", 4546.09),
 ];
 
 const LENGTH: &[Unit] = &[
-    unit(168, "Angstroms", "A", 0.0000000001),
-    unit(38, "Nanometers", "nm", 0.000000001),
-    unit(35, "Microns", "µm", 0.000001),
-    unit(37, "Millimeters", "mm", 0.001),
-    unit(30, "Centimeters", "cm", 0.01),
-    unit(34, "Meters", "m", 1.0),
-    unit(33, "Kilometers", "km", 1000.0),
-    unit(32, "Inches", "in", 0.0254),
-    unit(31, "Feet", "ft", 0.3048),
-    unit(40, "Yards", "yd", 0.9144),
-    unit(36, "Miles", "mi", 1609.344),
-    unit(39, "Nautical miles", "nmi", 1852.0),
+    unit(168, "Angstrom", "Angstroms", "A", 0.0000000001),
+    unit(38, "Nanometer", "Nanometers", "nm", 0.000000001),
+    unit(35, "Micron", "Microns", "µm", 0.000001),
+    unit(37, "Millimeter", "Millimeters", "mm", 0.001),
+    unit(30, "Centimeter", "Centimeters", "cm", 0.01),
+    unit(34, "Meter", "Meters", "m", 1.0),
+    unit(33, "Kilometer", "Kilometers", "km", 1000.0),
+    unit(32, "Inch", "Inches", "in", 0.0254),
+    unit(31, "Foot", "Feet", "ft", 0.3048),
+    unit(40, "Yard", "Yards", "yd", 0.9144),
+    unit(36, "Mile", "Miles", "mi", 1609.344),
+    unit(39, "NauticalMile", "Nautical miles", "nmi", 1852.0),
 ];
 
 const WEIGHT: &[Unit] = &[
-    unit(82, "Carats", "CD", 0.0002),
-    unit(90, "Milligrams", "mg", 0.000001),
-    unit(83, "Centigrams", "cg", 0.00001),
-    unit(84, "Decigrams", "dg", 0.0001),
-    unit(86, "Grams", "g", 0.001),
-    unit(85, "Dekagrams", "dag", 0.01),
-    unit(87, "Hectograms", "hg", 0.1),
-    unit(88, "Kilograms", "kg", 1.0),
-    unit(95, "Metric tonnes", "t", 1000.0),
-    unit(91, "Ounces", "oz", 0.028349523125),
-    unit(92, "Pounds", "lb", 0.45359237),
-    unit(94, "Stone", "st", 6.35029318),
-    unit(93, "Short tons (US)", "ton (US)", 907.18474),
-    unit(89, "Long tons (UK)", "ton (UK)", 1016.0469088),
+    unit(82, "Carat", "Carats", "CD", 0.0002),
+    unit(90, "Milligram", "Milligrams", "mg", 0.000001),
+    unit(83, "Centigram", "Centigrams", "cg", 0.00001),
+    unit(84, "Decigram", "Decigrams", "dg", 0.0001),
+    unit(86, "Gram", "Grams", "g", 0.001),
+    unit(85, "Decagram", "Dekagrams", "dag", 0.01),
+    unit(87, "Hectogram", "Hectograms", "hg", 0.1),
+    unit(88, "Kilogram", "Kilograms", "kg", 1.0),
+    unit(95, "Tonne", "Metric tonnes", "t", 1000.0),
+    unit(91, "Ounce", "Ounces", "oz", 0.028349523125),
+    unit(92, "Pound", "Pounds", "lb", 0.45359237),
+    unit(94, "Stone", "Stone", "st", 6.35029318),
+    unit(93, "ShortTon", "Short tons (US)", "ton (US)", 907.18474),
+    unit(89, "LongTon", "Long tons (UK)", "ton (UK)", 1016.0469088),
 ];
 
 const TEMPERATURE_UNITS: &[Unit] = &[
-    unit(46, "Celsius", "°C", 1.0),
-    unit(47, "Fahrenheit", "°F", 1.0),
-    unit(48, "Kelvin", "K", 1.0),
+    unit(46, "DegreesCelsius", "Celsius", "°C", 1.0),
+    unit(47, "DegreesFahrenheit", "Fahrenheit", "°F", 1.0),
+    unit(48, "Kelvin", "Kelvin", "K", 1.0),
 ];
 
 /// `(ratio, offset, offset first)` from Celsius, Fahrenheit and Kelvin (rows) to
@@ -262,169 +313,235 @@ const TEMPERATURE: [[(f64, f64, bool); 3]; 3] = [
 ];
 
 const ENERGY: &[Unit] = &[
-    unit(25, "Electron volts", "eV", 0.0000000000000000001602176565),
-    unit(27, "Joules", "J", 1.0),
-    unit(29, "Kilojoules", "kJ", 1000.0),
-    unit(24, "Thermal calories", "cal", 4.184),
-    unit(28, "Food calories", "kcal", 4184.0),
-    unit(26, "Foot-pounds", "ft•lb", 1.3558179483314),
-    unit(23, "British thermal units", "BTU", 1055.056),
-    unit(166, "Kilowatt-hours", "kWh", 3600000.0),
+    unit(
+        25,
+        "Electron-Volt",
+        "Electron volts",
+        "eV",
+        0.0000000000000000001602176565,
+    ),
+    unit(27, "Joule", "Joules", "J", 1.0),
+    unit(29, "Kilojoule", "Kilojoules", "kJ", 1000.0),
+    unit(24, "Calorie", "Thermal calories", "cal", 4.184),
+    unit(28, "Kilocalorie", "Food calories", "kcal", 4184.0),
+    unit(26, "Foot-Pound", "Foot-pounds", "ft•lb", 1.3558179483314),
+    unit(
+        23,
+        "BritishThermalUnit",
+        "British thermal units",
+        "BTU",
+        1055.056,
+    ),
+    unit(166, "Kilowatthour", "Kilowatt-hours", "kWh", 3600000.0),
 ];
 
 /// Pyeong comes last, and only regions that use it show it.
 const AREA: &[Unit] = &[
-    unit(9, "Square millimeters", "mm²", 0.000001),
-    unit(3, "Square centimeters", "cm²", 0.0001),
-    unit(7, "Square meters", "m²", 1.0),
-    unit(2, "Hectares", "ha", 10000.0),
-    unit(6, "Square kilometers", "km²", 1000000.0),
-    unit(5, "Square inches", "in²", 0.00064516),
-    unit(4, "Square feet", "ft²", 0.09290304),
-    unit(10, "Square yards", "yd²", 0.83612736),
-    unit(1, "Acres", "ac", 4046.8564224),
-    unit(8, "Square miles", "mi²", 2589988.110336),
-    unit(165, "Pyeong", "Pyeong", 400.0 / 121.0),
+    unit(9, "SquareMillimeter", "Square millimeters", "mm²", 0.000001),
+    unit(3, "SquareCentimeter", "Square centimeters", "cm²", 0.0001),
+    unit(7, "SquareMeter", "Square meters", "m²", 1.0),
+    unit(2, "Hectare", "Hectares", "ha", 10000.0),
+    unit(6, "SquareKilometer", "Square kilometers", "km²", 1000000.0),
+    unit(5, "SquareInch", "Square inches", "in²", 0.00064516),
+    unit(4, "SquareFoot", "Square feet", "ft²", 0.09290304),
+    unit(10, "SquareYard", "Square yards", "yd²", 0.83612736),
+    unit(1, "Acre", "Acres", "ac", 4046.8564224),
+    unit(8, "SquareMile", "Square miles", "mi²", 2589988.110336),
+    unit(165, "Pyeong", "Pyeong", "Pyeong", 400.0 / 121.0),
 ];
 
 /// Windows' factors: a mile per hour is 44.7 cm/s and a knot 51.44 cm/s.
 #[allow(clippy::excessive_precision)]
 const SPEED: &[Unit] = &[
-    unit(57, "Centimeters per second", "cm/s", 1.0),
-    unit(62, "Meters per second", "m/s", 100.0),
-    unit(59, "Kilometers per hour", "km/h", 27.777777777777777777778),
-    unit(58, "Feet per second", "ft/s", 30.48),
-    unit(63, "Miles per hour", "mph", 44.7),
-    unit(60, "Knots", "kn", 51.44),
-    unit(61, "Mach", "M", 34030.0),
+    unit(
+        57,
+        "CentimetersPerSecond",
+        "Centimeters per second",
+        "cm/s",
+        1.0,
+    ),
+    unit(62, "MetersPerSecond", "Meters per second", "m/s", 100.0),
+    unit(
+        59,
+        "KilometersPerHour",
+        "Kilometers per hour",
+        "km/h",
+        27.777777777777777777778,
+    ),
+    unit(58, "FeetPerSecond", "Feet per second", "ft/s", 30.48),
+    unit(63, "MilesPerHour", "Miles per hour", "mph", 44.7),
+    unit(60, "Knot", "Knots", "kn", 51.44),
+    unit(61, "Mach", "Mach", "M", 34030.0),
 ];
 
 const TIME: &[Unit] = &[
-    unit(51, "Microseconds", "µs", 0.000001),
-    unit(52, "Milliseconds", "ms", 0.001),
-    unit(54, "Seconds", "s", 1.0),
-    unit(53, "Minutes", "min", 60.0),
-    unit(50, "Hours", "hr", 3600.0),
-    unit(49, "Days", "d", 86400.0),
-    unit(55, "Weeks", "wk", 604800.0),
-    unit(56, "Years", "yr", 31557600.0),
+    unit(51, "Microsecond", "Microseconds", "µs", 0.000001),
+    unit(52, "Millisecond", "Milliseconds", "ms", 0.001),
+    unit(54, "Second", "Seconds", "s", 1.0),
+    unit(53, "Minute", "Minutes", "min", 60.0),
+    unit(50, "Hour", "Hours", "hr", 3600.0),
+    unit(49, "Day", "Days", "d", 86400.0),
+    unit(55, "Week", "Weeks", "wk", 604800.0),
+    unit(56, "Year", "Years", "yr", 31557600.0),
 ];
 
 #[allow(clippy::excessive_precision)]
 const POWER: &[Unit] = &[
-    unit(45, "Watts", "W", 1.0),
-    unit(44, "Kilowatts", "kW", 1000.0),
-    unit(43, "Horsepower (US)", "hp (US)", 745.69987158227022),
-    unit(42, "Foot-pounds/minute", "ft•lb/min", 0.0225969658055233),
-    unit(41, "BTUs/minute", "BTU/min", 17.58426666666667),
+    unit(45, "Watt", "Watts", "W", 1.0),
+    unit(44, "Kilowatt", "Kilowatts", "kW", 1000.0),
+    unit(
+        43,
+        "Horsepower",
+        "Horsepower (US)",
+        "hp (US)",
+        745.69987158227022,
+    ),
+    unit(
+        42,
+        "Foot-PoundPerMinute",
+        "Foot-pounds/minute",
+        "ft•lb/min",
+        0.0225969658055233,
+    ),
+    unit(
+        41,
+        "BTUPerMinute",
+        "BTUs/minute",
+        "BTU/min",
+        17.58426666666667,
+    ),
 ];
 
 #[allow(clippy::excessive_precision)]
 const DATA: &[Unit] = &[
-    unit(11, "Bits", "b", 0.000000125),
-    unit(167, "Nibble", "nybl", 0.0000005),
-    unit(12, "Bytes", "B", 0.000001),
-    unit(15, "Kilobits", "Kb", 0.000125),
-    unit(149, "Kibibits", "Ki", 0.000128),
-    unit(16, "Kilobytes", "KB", 0.001),
-    unit(150, "Kibibytes", "KiB", 0.001024),
-    unit(17, "Megabits", "Mb", 0.125),
-    unit(151, "Mebibits", "Mi", 0.131072),
-    unit(18, "Megabytes", "MB", 1.0),
-    unit(152, "Mebibytes", "MiB", 1.048576),
-    unit(13, "Gigabits", "Gb", 125.0),
-    unit(147, "Gibibits", "Gi", 134.217728),
-    unit(14, "Gigabytes", "GB", 1000.0),
-    unit(148, "Gibibytes", "GiB", 1073.741824),
-    unit(21, "Terabits", "Tb", 125000.0),
-    unit(155, "Tebibits", "Ti", 137438.953472),
-    unit(22, "Terabytes", "TB", 1000000.0),
-    unit(156, "Tebibytes", "TiB", 1099511.627776),
-    unit(19, "Petabits", "Pb", 125000000.0),
-    unit(153, "Pebibits", "Pi", 140737488.355328),
-    unit(20, "Petabytes", "PB", 1000000000.0),
-    unit(154, "Pebibytes", "PiB", 1125899906.842624),
-    unit(143, "Exabits", "E", 125000000000.0),
-    unit(145, "Exbibits", "Ei", 144115188075.855872),
-    unit(144, "Exabytes", "EB", 1000000000000.0),
-    unit(146, "Exbibytes", "EiB", 1152921504606.846976),
-    unit(163, "Zetabits", "Z", 125000000000000.0),
-    unit(161, "Zebibits", "Zi", 147573952589676.412928),
-    unit(164, "Zetabytes", "ZB", 1000000000000000.0),
-    unit(162, "Zebibytes", "ZiB", 1180591620717411.303424),
-    unit(159, "Yottabits", "Y", 125000000000000000.0),
-    unit(157, "Yobibits", "Yi", 151115727451828646.838272),
-    unit(160, "Yottabytes", "YB", 1000000000000000000.0),
-    unit(158, "Yobibytes", "YiB", 1208925819614629174.706176),
+    unit(11, "Bit", "Bits", "b", 0.000000125),
+    unit(167, "Nibble", "Nibble", "nybl", 0.0000005),
+    unit(12, "Byte", "Bytes", "B", 0.000001),
+    unit(15, "Kilobit", "Kilobits", "Kb", 0.000125),
+    unit(149, "Kibibits", "Kibibits", "Ki", 0.000128),
+    unit(16, "Kilobyte", "Kilobytes", "KB", 0.001),
+    unit(150, "Kibibytes", "Kibibytes", "KiB", 0.001024),
+    unit(17, "Megabit", "Megabits", "Mb", 0.125),
+    unit(151, "Mebibits", "Mebibits", "Mi", 0.131072),
+    unit(18, "Megabyte", "Megabytes", "MB", 1.0),
+    unit(152, "Mebibytes", "Mebibytes", "MiB", 1.048576),
+    unit(13, "Gigabit", "Gigabits", "Gb", 125.0),
+    unit(147, "Gibibits", "Gibibits", "Gi", 134.217728),
+    unit(14, "Gigabyte", "Gigabytes", "GB", 1000.0),
+    unit(148, "Gibibytes", "Gibibytes", "GiB", 1073.741824),
+    unit(21, "Terabit", "Terabits", "Tb", 125000.0),
+    unit(155, "Tebibits", "Tebibits", "Ti", 137438.953472),
+    unit(22, "Terabyte", "Terabytes", "TB", 1000000.0),
+    unit(156, "Tebibytes", "Tebibytes", "TiB", 1099511.627776),
+    unit(19, "Petabit", "Petabits", "Pb", 125000000.0),
+    unit(153, "Pebibits", "Pebibits", "Pi", 140737488.355328),
+    unit(20, "Petabyte", "Petabytes", "PB", 1000000000.0),
+    unit(154, "Pebibytes", "Pebibytes", "PiB", 1125899906.842624),
+    unit(143, "Exabits", "Exabits", "E", 125000000000.0),
+    unit(145, "Exbibits", "Exbibits", "Ei", 144115188075.855872),
+    unit(144, "Exabytes", "Exabytes", "EB", 1000000000000.0),
+    unit(146, "Exbibytes", "Exbibytes", "EiB", 1152921504606.846976),
+    unit(163, "Zetabits", "Zetabits", "Z", 125000000000000.0),
+    unit(161, "Zebibits", "Zebibits", "Zi", 147573952589676.412928),
+    unit(164, "Zetabytes", "Zetabytes", "ZB", 1000000000000000.0),
+    unit(
+        162,
+        "Zebibytes",
+        "Zebibytes",
+        "ZiB",
+        1180591620717411.303424,
+    ),
+    unit(159, "Yottabit", "Yottabits", "Y", 125000000000000000.0),
+    unit(157, "Yobibits", "Yobibits", "Yi", 151115727451828646.838272),
+    unit(160, "Yottabyte", "Yottabytes", "YB", 1000000000000000000.0),
+    unit(
+        158,
+        "Yobibytes",
+        "Yobibytes",
+        "YiB",
+        1208925819614629174.706176,
+    ),
 ];
 
 #[allow(clippy::excessive_precision)]
 const PRESSURE: &[Unit] = &[
-    unit(137, "Atmospheres", "atm", 1.0),
-    unit(138, "Bars", "ba", 0.9869232667160128),
-    unit(139, "Kilopascals", "kPa", 0.0098692326671601),
-    unit(140, "Millimeters of mercury", "mmHg", 0.0013155687145324),
-    unit(141, "Pascals", "Pa", 9.869232667160128e-6),
-    unit(142, "Pounds per square inch", "psi", 0.068045961016531),
+    unit(137, "Atmosphere", "Atmospheres", "atm", 1.0),
+    unit(138, "Bar", "Bars", "ba", 0.9869232667160128),
+    unit(139, "KiloPascal", "Kilopascals", "kPa", 0.0098692326671601),
+    unit(
+        140,
+        "MillimeterOfMercury",
+        "Millimeters of mercury",
+        "mmHg",
+        0.0013155687145324,
+    ),
+    unit(141, "Pascal", "Pascals", "Pa", 9.869232667160128e-6),
+    unit(
+        142,
+        "PSI",
+        "Pounds per square inch",
+        "psi",
+        0.068045961016531,
+    ),
 ];
 
 const ANGLE: &[Unit] = &[
-    unit(134, "Degrees", "deg", 1.0),
-    unit(135, "Radians", "rad", 57.29577951308233),
-    unit(136, "Gradians", "grad", 0.9),
+    unit(134, "Degree", "Degrees", "deg", 1.0),
+    unit(135, "Radian", "Radians", "rad", 57.29577951308233),
+    unit(136, "Gradian", "Gradians", "grad", 0.9),
 ];
 
 // The everyday comparison units, in Windows' order, with their pictures and gaps.
 
 const VOLUME_COMPARISONS: &[Comparison] = &[
-    comparison("coffee cups", "☕", 8.0, 236.5882),
-    comparison("bathtubs", "🛀", 10.0, 378541.2),
-    comparison("swimming pools", "🏊", 8.0, 3750000000.0),
+    comparison("CoffeeCup", "coffee cups", "☕", 8.0, 236.5882),
+    comparison("Bathtub", "bathtubs", "🛀", 10.0, 378541.2),
+    comparison("SwimmingPool", "swimming pools", "🏊", 8.0, 3750000000.0),
 ];
 
 const LENGTH_COMPARISONS: &[Comparison] = &[
-    comparison("paperclips", "📎", 6.0, 0.035052),
-    comparison("hands", "👋", 8.0, 0.18669),
-    comparison("jumbo jets", "✈", 8.0, 76.0),
+    comparison("Paperclip", "paperclips", "📎", 6.0, 0.035052),
+    comparison("Hand", "hands", "👋", 8.0, 0.18669),
+    comparison("JumboJet", "jumbo jets", "✈", 8.0, 76.0),
 ];
 
 const WEIGHT_COMPARISONS: &[Comparison] = &[
-    comparison("snowflakes", "❄", 8.0, 0.000002),
-    comparison("soccer balls", "⚽", 8.0, 0.4325),
-    comparison("elephants", "🐘", 9.0, 4000.0),
-    comparison("whales", "🐳", 9.0, 90000.0),
+    comparison("Snowflake", "snowflakes", "❄", 8.0, 0.000002),
+    comparison("SoccerBall", "soccer balls", "⚽", 8.0, 0.4325),
+    comparison("Elephant", "elephants", "🐘", 9.0, 4000.0),
+    comparison("Whale", "whales", "🐳", 9.0, 90000.0),
 ];
 
 const ENERGY_COMPARISONS: &[Comparison] = &[
-    comparison("batteries", "🔋", 10.0, 9000.0),
-    comparison("bananas", "🍌", 8.0, 439614.0),
-    comparison("slices of cake", "🍰", 8.0, 1046700.0),
+    comparison("Battery", "batteries", "🔋", 10.0, 9000.0),
+    comparison("Banana", "bananas", "🍌", 8.0, 439614.0),
+    comparison("SliceOfCake", "slices of cake", "🍰", 8.0, 1046700.0),
 ];
 
 const AREA_COMPARISONS: &[Comparison] = &[
-    comparison("hands", "👋", 8.0, 0.012516104),
-    comparison("sheets of paper", "📄", 8.0, 0.06032246),
-    comparison("soccer fields", "⚽", 10.0, 10869.66),
-    comparison("castles", "🏰", 10.0, 100000.0),
+    comparison("Hand", "hands", "👋", 8.0, 0.012516104),
+    comparison("Paper", "sheets of paper", "📄", 8.0, 0.06032246),
+    comparison("SoccerField", "soccer fields", "⚽", 10.0, 10869.66),
+    comparison("Castle", "castles", "🏰", 10.0, 100000.0),
 ];
 
 const SPEED_COMPARISONS: &[Comparison] = &[
-    comparison("turtles", "🐢", 9.0, 8.94),
-    comparison("horses", "🐎", 8.0, 2011.5),
-    comparison("jets", "✈", 8.0, 24585.0),
+    comparison("Turtle", "turtles", "🐢", 9.0, 8.94),
+    comparison("Horse", "horses", "🐎", 8.0, 2011.5),
+    comparison("Jet", "jets", "✈", 8.0, 24585.0),
 ];
 
 #[allow(clippy::excessive_precision)]
 const POWER_COMPARISONS: &[Comparison] = &[
-    comparison("light bulbs", "💡", 10.0, 60.0),
-    comparison("horses", "🐎", 8.0, 745.7),
-    comparison("train engines", "🚂", 9.0, 2982799.486329081),
+    comparison("LightBulb", "light bulbs", "💡", 10.0, 60.0),
+    comparison("Horse", "horses", "🐎", 8.0, 745.7),
+    comparison("TrainEngine", "train engines", "🚂", 9.0, 2982799.486329081),
 ];
 
 const DATA_COMPARISONS: &[Comparison] = &[
-    comparison("floppy disks", "💾", 9.0, 1.474560),
-    comparison("CDs", "💿", 9.0, 700.0),
-    comparison("DVDs", "📀", 10.0, 4700.0),
+    comparison("FloppyDisk", "floppy disks", "💾", 9.0, 1.474560),
+    comparison("CD", "CDs", "💿", 9.0, 700.0),
+    comparison("DVD", "DVDs", "📀", 10.0, 4700.0),
 ];
 
 /// One of the "About equal to" results: the value as shown, the unit's short name,
@@ -432,6 +549,8 @@ const DATA_COMPARISONS: &[Comparison] = &[
 #[derive(Clone, Debug, PartialEq)]
 pub struct Suggestion {
     pub value: String,
+    /// The unit's resource key suffix (see `Unit::key`) and its English short name.
+    pub key: &'static str,
     pub abbreviation: &'static str,
     pub glyph: Option<(&'static str, f32)>,
 }
@@ -603,6 +722,11 @@ impl Converter {
 
     pub fn value2(&self) -> String {
         self.field(!self.value1_is_source)
+    }
+
+    /// Whether both fields show the paste error (`Invalid input`, in English).
+    pub fn has_paste_error(&self) -> bool {
+        self.paste_error
     }
 
     fn field(&self, source: bool) -> String {
@@ -868,6 +992,7 @@ impl Converter {
                 let zero = rounded.parse::<f64>().unwrap_or(0.0) == 0.0;
                 (!zero || self.category.supports_negative()).then(|| Suggestion {
                     value: localize(&trim_trailing_zeros(&rounded)),
+                    key: units[i].key,
                     abbreviation: units[i].abbreviation,
                     glyph: None,
                 })
@@ -885,6 +1010,7 @@ impl Converter {
             let rounded = round_suggestion(converted);
             (rounded.parse::<f64>().unwrap_or(0.0) != 0.0).then(|| Suggestion {
                 value: localize(&trim_trailing_zeros(&rounded)),
+                key: comparisons[i].key,
                 abbreviation: comparisons[i].abbreviation,
                 glyph: Some((comparisons[i].glyph, comparisons[i].gap)),
             })
@@ -1045,6 +1171,34 @@ fn paste_is_valid(text: &str) -> bool {
 mod tests {
     use super::ConverterCommand::*;
     use super::*;
+
+    /// Every unit's key names it in the Windows resources: the English strings there
+    /// are the ones in the tables.
+    #[test]
+    fn units_have_windows_resource_keys() {
+        let english: std::collections::HashMap<&str, &str> = include_str!("../locales/en-US.txt")
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect();
+        let string = |kind: &str, key: &str| english.get(format!("{kind}_{key}").as_str()).copied();
+        for category in Category::ALL {
+            for unit in category.all_units() {
+                assert_eq!(string("UnitName", unit.key), Some(unit.name), "{unit:?}");
+                assert_eq!(
+                    string("UnitAbbreviation", unit.key),
+                    Some(unit.abbreviation),
+                    "{unit:?}"
+                );
+            }
+            for comparison in category.comparisons() {
+                assert_eq!(
+                    string("UnitAbbreviation", comparison.key),
+                    Some(comparison.abbreviation),
+                    "{comparison:?}"
+                );
+            }
+        }
+    }
 
     /// A converter for the US region, switched to `category` with the units at
     /// the given positions of the drop-down list.

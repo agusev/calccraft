@@ -14,9 +14,13 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   also in each slot's right-click menu.
 - **History:** every calculation is logged. Click an entry to bring it back, right-click it to copy
   or delete it, or use the trash button to clear the list.
+- **Docked history and memory:** from 560 px wide, history and memory sit next to the keypad
+  in a side panel with History and Memory tabs, as in Windows; narrower windows open them over
+  the keypad.
 - **Keep on top:** a compact always-on-top window, the same as in Windows.
-- **Settings:** opened from the menu, as in Windows. It has the App theme choice, the app version,
-  and links for sending feedback and to the project on GitHub.
+- **Settings:** opened from the menu, as in Windows. It has the App theme choice, the Language and
+  Regional format choices, the app version, and links for sending feedback and to the project on
+  GitHub.
 - **Light and dark themes:** pick Light, Dark or Use system setting in Settings. With the system
   setting, the app follows the Windows app mode, even when it changes while the app is open.
   The title bar switches with it. The choice is saved in `%APPDATA%\CalcCraft`.
@@ -27,6 +31,17 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   (`Cannot divide by zero`, `Result is undefined`, `Invalid input`, `Overflow`).
 - **Keyboard and clipboard:** see the shortcuts below. `Ctrl+C` copies the result. `Ctrl+V` pastes
   a number or a whole expression such as `12 + 5 =`, with the same checks as Windows.
+- **Keyboard navigation:** `Tab`, `Shift+Tab` and the arrow keys reach every control, with
+  Windows' focus rectangle, and `Space` or `Enter` presses it (`Enter` stays `=` on the keypad).
+  Menus, lists and the calendar open on their selected item and hand the focus back when they
+  close.
+- **Screen readers:** Narrator reads every control by its Windows name ("Positive negative",
+  "Memory store", …) and announces results as they change ("Display is 7").
+- **50 languages:** the interface uses the Windows Calculator's own translations and follows the
+  Windows display language. Numbers, dates and the first day of the week follow your regional
+  format (`1.234,5` and `15. Oktober 2026` in Germany), as in Windows. Unlike Windows, Settings
+  can also set the language and the regional format for CalcCraft alone: type the first letters
+  of a name to find it in the list.
 - **Date calculation mode** (open the ☰ menu):
   - **Difference between dates:** the difference broken into years, months, weeks and days,
     plus the total number of days (`4 years, 4 months, 4 days`, `1587 days`).
@@ -63,11 +78,15 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `Delete` | Clear entry (`CE`) |
 | `Esc` | Clear (`C`), close an open menu or panel, or leave Settings |
 | `Ctrl+M` / `Ctrl+P` / `Ctrl+Q` / `Ctrl+R` / `Ctrl+L` | `MS` / `M+` / `M−` / `MR` / `MC` |
-| `Ctrl+H` | Show or hide history |
+| `Ctrl+H` | Show or hide history (in narrow windows) |
 | `Ctrl+Shift+D` | Clear history |
 | `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number or an expression |
+| `Alt+1` / `Alt+5` or `Ctrl+E` | Standard / Date calculation mode |
+| `Tab` / `Shift+Tab`, arrow keys | Move the keyboard focus |
+| `Space` or `Enter` | Press the focused control (`Enter` is `=` on the keypad) |
 
-In the date calculation mode, `Esc` closes the open calendar or list, and `Ctrl+C` copies the result.
+In the date calculation mode, `Esc` closes the open calendar or list, `Page Up` and `Page Down`
+flip the calendar's pages, and `Ctrl+C` copies the result.
 
 In the converters, the digits, `.` or `,`, `Backspace` and `Delete` (`CE`) work as above,
 `F9` or `-` changes the sign (Temperature, Power and Angle only), `Ctrl+C` copies the active
@@ -108,6 +127,19 @@ Contributors (people and AI agents alike)
 should read [AGENTS.md](AGENTS.md) first: it describes the architecture, the Windows behaviors
 that the tests pin down, and known pitfalls.
 
+Besides the Language and Regional format settings, `CALCCRAFT_LANGUAGE` and `CALCCRAFT_REGION`
+(for example `de-DE`) stand in for the Windows settings that "Use system setting" follows, which
+helps testing. The strings in `locales/` come from the Windows Calculator's resource files;
+after adding a string to `tools/import-strings.ps1`, regenerate them from a clone of
+[microsoft/calculator](https://github.com/microsoft/calculator):
+
+```bash
+pwsh tools/import-strings.ps1 -Source ../win-calculator
+```
+
+The few strings Windows doesn't have (the Language and Regional format settings) are
+CalcCraft's own, translated by hand in `locales/calccraft.txt`.
+
 ## Releasing
 
 Bump `version` in `Cargo.toml`, merge that change, then push a tag with the same version:
@@ -135,10 +167,15 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for a future Scientific mode), exact arithmetic, number formatting, paste, memory, history, unit tests. No UI code. |
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
 | `src/converter.rs` | Unit converter logic: a port of the Windows converter with its units, factors, rounding and region defaults; paste; unit tests. No UI code. |
-| `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels with their context menus, menu, Settings, keyboard handling, fonts, title bar tint |
+| `src/locale.rs` | Regional number formats (decimal separator, digit grouping) and date patterns; unit tests. No UI code. |
+| `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels (flyouts or docked) with their context menus, menu, Settings, keyboard handling, fonts, title bar tint |
+| `src/app/access.rs` | Keyboard focus, focus rectangles and screen reader names for the custom-painted controls |
+| `src/app/strings.rs` | The interface's text in the user's language, from `locales/` |
+| `src/app/region.rs` | The user's regional formats, read from Windows |
 | `src/app/palette.rs` | The dark and light color palettes |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
 | `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
+| `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1`, and CalcCraft's own few in `calccraft.txt` |
 | `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
@@ -151,17 +188,24 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 - Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle)
   are similar Segoe Fluent Icons glyphs: Windows draws them from the Calculator's own icon font,
   which can't be used outside Windows.
-- Dates always use the Gregorian calendar, en-US formats (`October 15, 2026`) and weeks that
-  start on Sunday, whatever the system settings.
+- Dates always use the Gregorian calendar, even in regions that use another one.
 - The palettes are fixed: both themes use the purple tint and accent color of the reference
   screenshots. Windows tints its window with the Mica effect and your own accent color.
   The light background is an estimate, not a sample.
 - There is no high contrast theme.
 - The About section in Settings shows only the name and version, without the license and
   privacy links.
-- The text is always English, and numbers always use en-US formatting (`1,234.5`),
-  whatever the system locale.
-- In wide windows, history and memory open over the keypad instead of in a docked side panel.
+- egui can't lay out right-to-left text or shape complex scripts, so Arabic, Persian, Hebrew,
+  Hindi, Kannada, Malayalam, Tamil, Telugu, Khmer and Lao users get the next language in their
+  Windows language list, or English. Numbers always use Western digits, and the interface is
+  never mirrored.
+- The contribute sentence on the Settings page, the menu button's screen reader names and the
+  calendar's arrows stay English: Windows takes them from places outside the Calculator's own
+  translations.
+- Pasted text loses its group separators before the decimal separator becomes a point. Windows
+  does it the other way round, which loses the decimal point where the group separator is a point
+  (`1,5` pastes as `15` with German formats).
+- `Esc` leaves the Settings page; in Windows only the back button does.
 
 ## Disclaimer
 
@@ -171,7 +215,7 @@ installation and are not part of this repository.
 
 ## Acknowledgements & Credits
 
-This project is heavily inspired by and builds upon the architecture and logic of the official [Microsoft Calculator](https://github.com/Microsoft/calculator) repository, licensed under the [MIT License](https://github.com/microsoft/calculator/blob/main/LICENSE).
+This project is heavily inspired by and builds upon the architecture and logic of the official [Microsoft Calculator](https://github.com/Microsoft/calculator) repository, licensed under the [MIT License](https://github.com/microsoft/calculator/blob/main/LICENSE). The translations in `locales/` are taken from its resource files.
 
 > **Disclaimer:** This project is an independent, community-driven port to Rust and is **not** affiliated with, endorsed by, or in any way officially connected with Microsoft Corporation.
 
