@@ -1584,76 +1584,12 @@ impl TitleBar {
     fn apply(&self, _theme: egui::Theme) {}
 }
 
-/// Window icon: a small calculator drawn pixel by pixel.
+/// The window icon, drawn by `icon.rs` (the executable embeds the same picture).
 pub fn window_icon() -> egui::IconData {
-    const SIZE: usize = 64;
-    let inside = |x: f32, y: f32, rect: Rect, radius: f32| {
-        let dx = (rect.left() + radius - x)
-            .max(x - (rect.right() - radius))
-            .max(0.0);
-        let dy = (rect.top() + radius - y)
-            .max(y - (rect.bottom() - radius))
-            .max(0.0);
-        dx * dx + dy * dy <= radius * radius && rect.contains(pos2(x, y))
-    };
-    let body = Rect::from_min_max(pos2(10.0, 4.0), pos2(54.0, 60.0));
-    let screen = Rect::from_min_max(pos2(16.0, 10.0), pos2(48.0, 22.0));
-    let key = |row: usize, col: usize| {
-        let min = pos2(16.0 + col as f32 * 11.5, 27.0 + row as f32 * 8.5);
-        Rect::from_min_size(min, vec2(9.0, 6.5))
-    };
-    let color_at = |x: f32, y: f32| -> Color32 {
-        if !inside(x, y, body, 7.0) {
-            return Color32::TRANSPARENT;
-        }
-        if inside(x, y, screen, 2.0) {
-            return palette::DARK.accent;
-        }
-        for row in 0..4 {
-            for col in 0..3 {
-                if inside(x, y, key(row, col), 1.5) {
-                    return if (row, col) == (3, 2) {
-                        palette::DARK.accent
-                    } else {
-                        Color32::from_gray(0xE6)
-                    };
-                }
-            }
-        }
-        palette::DARK.digit
-    };
-
-    // Anti-aliasing: 4×4 samples per pixel.
-    let mut rgba = Vec::with_capacity(SIZE * SIZE * 4);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let mut sum = [0u32; 4];
-            for sy in 0..4 {
-                for sx in 0..4 {
-                    let c = color_at(
-                        x as f32 + (sx as f32 + 0.5) / 4.0,
-                        y as f32 + (sy as f32 + 0.5) / 4.0,
-                    );
-                    let alpha = c.a() as u32;
-                    sum[0] += c.r() as u32 * alpha;
-                    sum[1] += c.g() as u32 * alpha;
-                    sum[2] += c.b() as u32 * alpha;
-                    sum[3] += alpha;
-                }
-            }
-            let alpha = sum[3];
-            let channel = |v: u32| v.checked_div(alpha).map_or(0, |c| c as u8);
-            rgba.extend([
-                channel(sum[0]),
-                channel(sum[1]),
-                channel(sum[2]),
-                (alpha / 16) as u8,
-            ]);
-        }
-    }
+    const SIZE: u32 = 64;
     egui::IconData {
-        rgba,
-        width: SIZE as u32,
-        height: SIZE as u32,
+        rgba: crate::icon::rgba(SIZE),
+        width: SIZE,
+        height: SIZE,
     }
 }

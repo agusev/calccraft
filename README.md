@@ -62,6 +62,8 @@ In the date calculation mode, `Esc` closes the open calendar or list, and `Ctrl+
   Other platforms should build, using egui's default fonts and a plain title bar, but nobody
   has tested them.
 - **Rust 1.95 or newer** (edition 2024; eframe 0.36 needs at least 1.95).
+- **Windows SDK** for `rc.exe`, which embeds the icon into the executable. It comes with the
+  Visual Studio C++ build tools that Rust on Windows needs anyway.
 
 ## Build and run
 
@@ -108,7 +110,9 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 
 | Path | Contents |
 | --- | --- |
-| `src/main.rs` | Entry point: window options and the generated window icon |
+| `src/main.rs` | Entry point: window options |
+| `src/icon.rs` | The app icon, drawn in code: the window icon and the icon embedded in the executable |
+| `build.rs` | Embeds the icon and the version information (CalcCraft, version from `Cargo.toml`) into `calculator.exe` |
 | `src/engine.rs` | Calculator logic: input state machine, exact arithmetic, number formatting, memory, history, unit tests. No UI code. |
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
 | `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels, menu, Settings, keyboard handling, fonts, title bar tint |

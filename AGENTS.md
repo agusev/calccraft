@@ -29,7 +29,9 @@ and the user-facing changes that are welcome are the ones that bring the app clo
 ## Architecture
 
 ```
-src/main.rs              window options, window icon, eframe::run_native
+src/main.rs              window options, eframe::run_native
+src/icon.rs              the app icon, drawn in code with std only (also compiled into build.rs)
+build.rs                 embeds the icon and version info into calculator.exe (Windows only)
 src/engine.rs            calculator logic, no UI dependencies, unit tests at the bottom
 src/dates.rs             date calculation logic (chrono), no UI dependencies, unit tests
 src/app.rs               egui user interface (custom painting), modes, menu, keyboard, fonts, title bar
@@ -173,6 +175,10 @@ These come from the Windows Calculator source and are pinned by the tests in `da
   always opens at its default size.
 - Release builds use `windows_subsystem = "windows"`, so `println!` output goes nowhere.
   Debug with `cargo run`.
+- `build.rs` includes `src/icon.rs` with `#[path]`, so `icon.rs` must not use egui or any other
+  dependency. The build writes a multi-size .ico file to `OUT_DIR` and embeds it with
+  `winresource`, which needs `rc.exe` from the Windows SDK. After rebuilding, Explorer may show
+  the old icon from its icon cache for a while.
 - egui 0.36 has no `raw_scroll_delta`. The calendar reads `Event::MouseWheel` events itself
   (`wheel_delta`) and flips one page per 40 points of wheel movement.
 - `chrono` is used without default features (`clock`, `std` only). Use `checked_*` methods for

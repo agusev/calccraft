@@ -4,6 +4,7 @@
 mod app;
 mod dates;
 mod engine;
+mod icon;
 
 use eframe::egui;
 
