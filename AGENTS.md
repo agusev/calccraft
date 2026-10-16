@@ -57,15 +57,27 @@ src/app/date_view.rs     the date calculation mode's UI (a child module of app.r
 - Everything is painted by hand. `button_flash` draws every key, and the layout is computed
   from the window rect in `App::ui`. The only stock egui widget is the `ScrollArea` in the
   history and memory panels.
-- Color constants at the top were sampled from a Windows 11 screenshot. Reuse them; don't
-  add new color literals in drawing code.
+- All colors come from `Palette` in `app/palette.rs`, which has a `DARK` and a `LIGHT` constant.
+  `App::ui` picks one from `ctx.theme()` at the start of every frame. Drawing methods read it
+  with `let p = self.palette;`, and free functions take `p: &Palette`. Don't put color
+  literals in drawing code: add a field to `Palette` and fill it in both themes.
+- Keypad colors follow the opacity table in the Windows Calculator's `App.xaml`: white at a fixed
+  opacity over the background, computed with `white()` / `black()` / `over()`. Examples: number
+  keys are 12.5 % in dark and 100 % in light; operators are 8.52 % in dark and 50 % in light.
+  A unit test checks that the dark values still match the colors sampled from the reference
+  screenshot.
+- The App theme choice (`Theme`) maps to egui's `ThemePreference`. With `System`, egui follows
+  the Windows app mode, including live changes. `TitleBar::apply` recolors the system title bar
+  whenever the effective theme changes. The choice is saved through eframe storage under
+  Windows' own key and values (`SelectedAppTheme` = `Light` / `Dark` / `Default`).
 - Icons are Segoe Fluent Icons code points (`ICON_*`) drawn through `CalculatorApp::icon`,
   which falls back to plain text when the icon font is missing.
 - Keyboard: `char_command` handles text input (digits, operators), and `handle_key` handles
   named keys and `Ctrl` shortcuts. The date mode has its own `handle_date_keyboard`, so
   calculator keys do nothing there.
 - `Mode` (`Standard`, `DateCalculation`) is picked in the ☰ menu (`draw_navigation`). `App::ui`
-  hands the date mode over to `draw_date_mode` and returns early.
+  hands the date mode over to `draw_date_mode` and returns early. `Page::Settings` replaces
+  either mode, and going back returns to the mode that was open.
 
 ### `dates.rs` and `app/date_view.rs`
 
@@ -75,6 +87,8 @@ src/app/date_view.rs     the date calculation mode's UI (a child module of app.r
 - `date_view.rs` adds `impl CalculatorApp` methods and keeps its state in `DateState`. Only one
   popup is open at a time (`Popup`: the page list, the calendar, or a 0–999 list). It's drawn
   last, over a full-window "light dismiss" backdrop that closes it when clicked.
+- Its colors are `Palette` fields too (`popup_*`, `calendar_*`, `control_*`, `other_month`).
+  The Add/Subtract choice uses the same `radio_button` as the Settings page.
 - Sizes come from `DateCalculator.xaml`: 16 px page margin, 32 px controls, 12 px captions,
   14 px values, results at 20 px from a 480 px window width and 14 px below that, and 84 px
   wide offset boxes.
@@ -151,8 +165,12 @@ These come from the Windows Calculator source and are pinned by the tests in `da
   and pressing `Enter` would press it again on top of `=`.
 - The font families `semibold` and `icons` must always be registered in `setup_fonts`, even
   when the font files are missing: egui panics on unknown font families.
-- The title bar tint (`tint_title_bar`) calls `DwmSetWindowAttribute` and exists only under
-  `#[cfg(windows)]`.
+- The title bar tint (`TitleBar`) calls `DwmSetWindowAttribute` and only does something under
+  `#[cfg(windows)]`. It keeps the window handle as an `isize`, so the app struct doesn't hold a
+  raw pointer.
+- eframe's `persistence` feature saves state in `%APPDATA%\CalcCraft\data\app.ron` (the folder
+  is named after the app name passed to `run_native`). `persist_window` is off, so the window
+  always opens at its default size.
 - Release builds use `windows_subsystem = "windows"`, so `println!` output goes nowhere.
   Debug with `cargo run`.
 - egui 0.36 has no `raw_scroll_delta`. The calendar reads `Event::MouseWheel` events itself
@@ -166,11 +184,12 @@ Unit tests don't cover the UI. After visual or interaction changes:
 
 1. Run the app (`cargo run`) and click through what you changed: hover, press, disabled
    states (enter `1/0=` for the error state), the history and memory panels, the menu,
-   keep-on-top mode, and resizing. In the date mode, check the page list, both date pickers
-   with the month, year and decade views, the 0–999 lists, `Esc`, and both a narrow
-   (< 480 px) and a wide window.
+   keep-on-top mode, and resizing. Check both themes (Settings → App theme). In the date mode,
+   check the page list, both date pickers with the month, year and decade views, the 0–999
+   lists, `Esc`, and both a narrow (< 480 px) and a wide window.
 2. Compare it side by side with the real Windows Calculator.
-3. If the look changed, update `docs/screenshot.png` or `docs/date-calculation.png`.
+3. If the look changed, update `docs/screenshot.png` (dark), `docs/screenshot-light.png` or
+   `docs/date-calculation.png`.
 
 ## Git and pull requests
 
