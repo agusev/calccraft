@@ -5,8 +5,8 @@ Read this before changing code. Agent-specific files (such as `CLAUDE.md`) only 
 
 ## What this project is
 
-A clone of the Windows 11 Calculator's **Standard** and **Date calculation** modes, written in
-Rust with eframe/egui.
+A clone of the Windows 11 Calculator's **Standard** and **Date calculation** modes and its unit
+**converters** (all but Currency), written in Rust with eframe/egui.
 **The real Windows Calculator is the specification.** Visual style and behavior should match it,
 and the user-facing changes that are welcome are the ones that bring the app closer to the original.
 
@@ -34,8 +34,10 @@ src/icon.rs              the app icon, drawn in code with std only (also compile
 build.rs                 embeds the icon and version info into calculator.exe (Windows only)
 src/engine.rs            calculator logic, no UI dependencies, unit tests at the bottom
 src/dates.rs             date calculation logic (chrono), no UI dependencies, unit tests
+src/converter.rs         unit converter logic and unit data, no UI dependencies, unit tests
 src/app.rs               egui user interface (custom painting), modes, menu, keyboard, fonts, title bar
 src/app/date_view.rs     the date calculation mode's UI (a child module of app.rs)
+src/app/converter_view.rs  the converters' UI (a child module of app.rs)
 ```
 
 ### `engine.rs`
@@ -85,14 +87,16 @@ src/app/date_view.rs     the date calculation mode's UI (a child module of app.r
 - Icons are Segoe Fluent Icons code points (`ICON_*`) drawn through `CalculatorApp::icon`,
   which falls back to plain text when the icon font is missing.
 - Keyboard: `char_command` handles text input (digits, operators), and `handle_key` handles
-  named keys and `Ctrl` shortcuts. The date mode has its own `handle_date_keyboard`, so
-  calculator keys do nothing there.
+  named keys and `Ctrl` shortcuts. The date mode and the converters have their own
+  `handle_date_keyboard` and `handle_converter_keyboard`, so calculator keys do nothing there.
 - Right-clicking a history or memory item opens its context menu (`draw_context_menu`, state in
   `context_menu`). It's drawn last in the panel over a full-window backdrop that closes it, like
   the date mode's popups, and uses their `popup_*` colors and `popup_frame`.
-- `Mode` (`Standard`, `DateCalculation`) is picked in the ☰ menu (`draw_navigation`). `App::ui`
-  hands the date mode over to `draw_date_mode` and returns early. `Page::Settings` replaces
-  either mode, and going back returns to the mode that was open.
+- `Mode` (`Standard`, `DateCalculation`, `Converter(Category)`) is picked in the ☰ menu
+  (`draw_navigation`), which lists `Mode::CALCULATORS` and `Category::ALL` under two headings
+  and scrolls when the window is short. `App::ui` hands the date mode and the converters over to
+  `draw_date_mode` and `draw_converter_mode` and returns early. `Page::Settings` replaces any
+  mode, and going back returns to the mode that was open.
 
 ### `dates.rs` and `app/date_view.rs`
 
@@ -107,6 +111,34 @@ src/app/date_view.rs     the date calculation mode's UI (a child module of app.r
 - Sizes come from `DateCalculator.xaml`: 16 px page margin, 32 px controls, 12 px captions,
   14 px values, results at 20 px from a 480 px window width and 14 px below that, and 84 px
   wide offset boxes.
+
+### `converter.rs` and `app/converter_view.rs`
+
+- `converter.rs` is a port of `UnitConverter` (`CalcManager/UnitConverter.cpp`) with the unit
+  tables of `UnitConverterDataLoader.cs` and the field logic of `UnitConverterViewModel.cs`.
+  `Converter` keeps Windows' state as strings: `current` (`m_currentDisplay`, what is typed),
+  `result` (`m_returnDisplay`), `switched_active`, and `value1_is_source` (which field is typed into).
+  The UI calls `execute(ConverterCommand)`, `activate`, `set_unit1` / `set_unit2`,
+  `set_category`, `paste`, and the getters (`value1`, `value2`, `unit1`, `unit2`, `units`,
+  `suggestions`).
+- `suggestions` ports `CalculateSuggested` for the "About equal to" row. The everyday
+  comparison units (Windows' whimsical units) live in separate `*_COMPARISONS` tables with
+  their Segoe UI Symbol pictures from `DelighterUnitStyles.xaml`, so they never reach the
+  drop-down lists.
+- It converts with `f64`, not `BigRational`: Windows converts with `double` and rounds with
+  `RoundSignificantDigits` and friends, and only the same arithmetic gives the same digits.
+  Keep the factors exactly as `UnitConverterDataLoader.cs` writes them (hence the
+  `clippy::excessive_precision` allows) and look the units up by name in tests.
+- The default units depend on the Windows region (`Region`, from `GetUserDefaultGeoName` in
+  `converter_view.rs`), like Windows' flags in `LoadData`. `preferences` / `restore_preferences`
+  save the last category and units under Windows' key `UnitConverterPreferences`.
+- `converter_view.rs` adds `impl CalculatorApp` methods and keeps its state in
+  `ConverterState`. Rows follow `UnitConverter.xaml` (`star_rows` sizes them like XAML star
+  rows with minimums); a landscape window moves the keypad to the right half, and from 640 px
+  the values, unit pickers and keys get larger. `draw_suggestions` fills the row under the
+  values like `HorizontalNoOverflowStackPanel`. The unit drop-down reuses the date view's
+  `list_item` and `popup_frame`, and the unit pickers' hover and pressed text colors are
+  `Palette::unit_hover` / `unit_pressed`.
 
 ## Windows behaviors the tests pin down
 
@@ -175,11 +207,32 @@ These come from the Windows Calculator source and are pinned by the tests in `da
 - Formats: pickers show `October 15, 2026`, and the add/subtract result shows
   `Thursday, October 15, 2026`.
 
+### Unit converters
+
+These come from the Windows Calculator source and are pinned by the tests in `converter.rs`:
+
+- Results get at least 7 significant digits, or as many as were typed (up to 15), and trailing
+  zeros are dropped: 5 km → `3.106856` mi, 1 m → `3.28084` ft. Results below 0.000001 get 15
+  decimals. Above 15 integer digits or below 1e-14 they use C++'s scientific notation, shown with
+  the exponent's leading zero removed: `8.000000e+24`, `1.500000e-5`.
+- Units with the same factor (milliliters and cubic centimeters) echo the input as typed,
+  without trailing zeros.
+- Up to 15 characters can be typed, counting the minus sign but not the decimal point.
+- `±` exists only for Temperature, Power and Angle. Switching to another category drops a minus sign.
+- Activating the other field keeps both values; the next key starts a new number there.
+  A new source unit does the same, a new target unit just converts again.
+- Paste accepts one plain number (no expression, no e-notation, at most 16 characters). A minus
+  sign separated from the number is dropped (`- 3` pastes `3`).
+- "About equal to" lists the other units closest to 1 first (by the size of log10), rounded to
+  2 decimals below 100, 1 below 1,000 and none above, without results that round to 0 (except in
+  Temperature, Power and Angle). Then comes the everyday comparison closest to 1:
+  100 cm → `1 m`, `1.09 yd`, `3.28 ft`, … `5.36 hands`.
+
 ## Conventions
 
 - **English everywhere:** code, comments, docs, UI strings, commit messages and PR text.
-- Keep `engine.rs` and `dates.rs` free of egui and other UI code. Any new calculator or date
-  behavior needs a test.
+- Keep `engine.rs`, `dates.rs` and `converter.rs` free of egui and other UI code. Any new
+  calculator, date or converter behavior needs a test.
 - Comments explain *why*, especially Windows quirks. Public items get `///` doc comments.
 - Code is formatted with `rustfmt` (default settings). The keypad table `KEYS` is marked
   `#[rustfmt::skip]` so it keeps its 4-column grid.
@@ -192,8 +245,11 @@ These come from the Windows Calculator source and are pinned by the tests in `da
 - **egui 0.36 API:** the app implements `App::ui(&mut self, ui, frame)` (not `update`). Buttons
   use `Sense::CLICK` *without* `FOCUSABLE`. Otherwise a clicked button keeps keyboard focus,
   and pressing `Enter` would press it again on top of `=`.
-- The font families `semibold` and `icons` must always be registered in `setup_fonts`, even
-  when the font files are missing: egui panics on unknown font families.
+- The font families `semibold`, `light`, `symbols` and `icons` must always be registered in
+  `setup_fonts`, even when the font files are missing: egui panics on unknown font families.
+- Don't bundle the Windows Calculator's `CalculatorIcons.ttf` (it has the converter icons and
+  the `±` glyph): the font's own license allows it only inside Windows. Use Segoe Fluent Icons
+  glyphs from the system font instead (`category_icon`).
 - The title bar tint (`TitleBar`) calls `DwmSetWindowAttribute` and only does something under
   `#[cfg(windows)]`. It keeps the window handle as an `isize`, so the app struct doesn't hold a
   raw pointer.
@@ -220,10 +276,12 @@ Unit tests don't cover the UI. After visual or interaction changes:
    right-click menus, the menu,
    keep-on-top mode, and resizing. Check both themes (Settings → App theme). In the date mode,
    check the page list, both date pickers with the month, year and decade views, the 0–999
-   lists, `Esc`, and both a narrow (< 480 px) and a wide window.
+   lists, `Esc`, and both a narrow (< 480 px) and a wide window. In the converters, check
+   both unit drop-downs (a short list like Pressure and a scrolling one like Data), switching
+   the active field, `±` in Temperature, paste, and a landscape and a ≥ 640 px window.
 2. Compare it side by side with the real Windows Calculator.
-3. If the look changed, update `docs/screenshot.png` (dark), `docs/screenshot-light.png` or
-   `docs/date-calculation.png`.
+3. If the look changed, update `docs/screenshot.png` (dark), `docs/screenshot-light.png`,
+   `docs/date-calculation.png` or `docs/unit-converter.png`.
 
 ## Git and pull requests
 

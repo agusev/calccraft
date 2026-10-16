@@ -1192,24 +1192,46 @@ impl Calculator {
 
 // ----------------------------------------------------------------- paste
 
-/// Checks pasted text like Windows' `CopyPasteManager::ValidatePasteExpression`.
-/// Numbers in e-notation are rejected: the engine has no exponent entry yet.
-fn paste_is_valid(text: &str, scientific: bool) -> bool {
+/// The characters `CopyPasteManager::ExtractOperands` looks at, per mode. The
+/// converters use the basic set.
+pub(crate) const BASIC_PASTE_CHARACTERS: &str = "0123456789+-.e";
+const STANDARD_PASTE_CHARACTERS: &str = "0123456789+-.e*/";
+const SCIENTIFIC_PASTE_CHARACTERS: &str = "0123456789+-.e*/()^%";
+
+/// The first steps of `CopyPasteManager::ValidatePasteExpression`, shared with the
+/// converters: `None` if the text is too long, otherwise the text without the
+/// characters Windows ignores (spaces, grouping commas, quotes, currency signs)
+/// and without a trailing `=`.
+pub(crate) fn clean_paste(text: &str) -> Option<String> {
     const UNWANTED: [char; 19] = [
         ' ', ',', '"', '¥', '¤', '₵', '$', '₡', '₩', '₪', '₦', '₹', '£', '€', '\u{202a}',
         '\u{202b}', '\u{202c}', '\u{202d}', '\u{a0}',
     ];
     if text.chars().count() > MAX_PASTE_LENGTH {
-        return false;
+        return None;
     }
     let mut expression: String = text.chars().filter(|c| !UNWANTED.contains(c)).collect();
     if expression.ends_with('=') {
         expression.pop();
     }
+    Some(expression)
+}
+
+/// Checks pasted text like Windows' `CopyPasteManager::ValidatePasteExpression`.
+/// Numbers in e-notation are rejected: the engine has no exponent entry yet.
+fn paste_is_valid(text: &str, scientific: bool) -> bool {
+    let Some(expression) = clean_paste(text) else {
+        return false;
+    };
     if scientific && !expression.chars().any(|c| c.is_ascii_digit()) {
         return false;
     }
-    let operands = extract_operands(&expression, scientific);
+    let valid = if scientific {
+        SCIENTIFIC_PASTE_CHARACTERS
+    } else {
+        STANDARD_PASTE_CHARACTERS
+    };
+    let operands = extract_operands(&expression, valid);
     let max_length = if scientific { 32 } else { MAX_DIGITS as usize };
     !operands.is_empty()
         && operands.iter().all(|operand| {
@@ -1218,13 +1240,10 @@ fn paste_is_valid(text: &str, scientific: bool) -> bool {
 }
 
 /// Splits pasted text into operands at the binary operators
-/// (`CopyPasteManager::ExtractOperands`). A sign is not an operator.
-fn extract_operands(expression: &str, scientific: bool) -> Vec<String> {
-    let valid = if scientific {
-        "0123456789+-.e*/()^%"
-    } else {
-        "0123456789+-.e*/"
-    };
+/// (`CopyPasteManager::ExtractOperands`), looking only at the `valid` characters.
+/// A sign is not an operator. Empty when there are too many operands or an
+/// exponent is too long.
+pub(crate) fn extract_operands(expression: &str, valid: &str) -> Vec<String> {
     let chars: Vec<char> = expression.chars().collect();
     let mut operands = Vec::new();
     let mut last_index = 0;
@@ -1286,7 +1305,7 @@ fn extract_operands(expression: &str, scientific: bool) -> Vec<String> {
 /// Whether an operand is a number: `\s*[-+]?(\d+(\.\d*)?|\.\d+)\s*`, and in the
 /// Scientific mode with opening parentheses (each may be signed) before it and
 /// closing ones after it, or just an optional sign.
-fn operand_matches(operand: &str, scientific: bool) -> bool {
+pub(crate) fn operand_matches(operand: &str, scientific: bool) -> bool {
     let mut rest = operand.trim_start();
     if scientific {
         if matches!(rest.trim_end(), "" | "+" | "-") {
@@ -1490,7 +1509,7 @@ fn format_with(v: &Number, grouping: bool) -> String {
     )
 }
 
-fn group_thousands(digits: &str) -> String {
+pub(crate) fn group_thousands(digits: &str) -> String {
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
@@ -1964,8 +1983,14 @@ mod tests {
 
     #[test]
     fn paste_operand_rules() {
-        assert_eq!(extract_operands("12+-5", false), ["12", "-5"]);
-        assert_eq!(extract_operands("-3*4", false), ["-3", "4"]);
+        assert_eq!(
+            extract_operands("12+-5", STANDARD_PASTE_CHARACTERS),
+            ["12", "-5"]
+        );
+        assert_eq!(
+            extract_operands("-3*4", STANDARD_PASTE_CHARACTERS),
+            ["-3", "4"]
+        );
         assert!(operand_matches(" -1.5 ", false));
         assert!(operand_matches(".5", false));
         assert!(!operand_matches("1.2.3", false));
