@@ -51,6 +51,22 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 
 ![Screenshot of the date calculation mode](docs/date-calculation.png)
 
+- **Programmer mode** (open the ☰ menu, or `Alt+4`):
+  - The value in HEX, DEC, OCT and BIN at once; click a radix to type in it. Digits that
+    don't exist in the radix are disabled, and right-clicking a radix copies its value.
+  - QWORD, DWORD, WORD and BYTE words in two's complement: a smaller word keeps the low
+    bits, a larger one extends the sign, and decimal numbers are signed (`FF` is `-1` in a byte).
+  - `AND`, `OR`, `NOT`, `NAND`, `NOR`, `XOR` (the Bitwise menu), shifts and rotations (the Bit
+    shift menu: arithmetic, logical, circular, or through the carry bit), integer `÷` and the
+    remainder `%`, all with operator precedence and parentheses, as in Windows.
+  - The bit toggling keypad shows all 64 bits; click one to flip it.
+  - The engine is Windows' own integer mode, quirks included: switching the radix rewrites
+    the expression line, and a quotient inside parentheses keeps its fraction until they
+    close (`(255 AND 10 − 7 ÷ 2)` is 6).
+  - Memory is shared with the Standard mode, as in Windows; there is no history.
+
+![Screenshot of the programmer mode](docs/programmer.png)
+
 - **Unit converters** (under Converter in the ☰ menu): Volume, Length, Weight and mass,
   Temperature, Energy, Area, Speed, Time, Power, Data, Pressure and Angle.
   - Windows' units and conversion factors, and its rounding (at least 7 significant digits).
@@ -81,12 +97,29 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `Ctrl+H` | Show or hide history (in narrow windows) |
 | `Ctrl+Shift+D` | Clear history |
 | `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number or an expression |
-| `Alt+1` / `Alt+5` or `Ctrl+E` | Standard / Date calculation mode |
+| `Alt+1` / `Alt+4` / `Alt+5` or `Ctrl+E` | Standard / Programmer / Date calculation mode |
 | `Tab` / `Shift+Tab`, arrow keys | Move the keyboard focus |
 | `Space` or `Enter` | Press the focused control (`Enter` is `=` on the keypad) |
 
 In the date calculation mode, `Esc` closes the open calendar or list, `Page Up` and `Page Down`
 flip the calendar's pages, and `Ctrl+C` copies the result.
+
+In the programmer mode, Windows' own keys apply:
+
+| Key | Action |
+| --- | --- |
+| `0`–`9`, `A`–`F` | Digits (`A`–`F` in HEX only) |
+| `F5` / `F6` / `F7` / `F8` | HEX / DEC / OCT / BIN |
+| `F2` / `F3` / `F4` / `F12` | DWORD / WORD / BYTE / QWORD |
+| `&` `\|` `^` `~` | AND, OR, XOR, NOT |
+| `.` `\` | NAND, NOR |
+| `<` `>` | Shift or rotate left and right, as chosen in the Bit shift menu |
+| `%` | Remainder (`Mod`) |
+| `(` `)` | Parentheses |
+
+`Ctrl+C` copies the value in the current radix without its digit groups, and `Ctrl+V` pastes
+numbers and expressions in the current radix, C-style notation included (`0x1F` or `1Fh` in HEX,
+`0b101` in BIN, `255u` or `1_000` in DEC), as long as they fit into the word size.
 
 In the converters, the digits, `.` or `,`, `Backspace` and `Delete` (`CE`) work as above,
 `F9` or `-` changes the sign (Temperature, Power and Angle only), `Ctrl+C` copies the active
@@ -164,7 +197,8 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/main.rs` | Entry point: window options |
 | `src/icon.rs` | The app icon, drawn in code: the window icon and the icon embedded in the executable |
 | `build.rs` | Embeds the icon and the version information (CalcCraft, version from `Cargo.toml`) into `calculator.exe` |
-| `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for a future Scientific mode), exact arithmetic, number formatting, paste, memory, history, unit tests. No UI code. |
+| `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for the Programmer and a future Scientific mode), exact arithmetic, number formatting, paste, memory, history, unit tests. No UI code. |
+| `src/engine/integer.rs` | The Programmer mode's integer mode: radixes, word sizes, two's complement, bitwise operators, shifts and rotations, digit limits and paste rules; unit tests. No UI code. |
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
 | `src/converter.rs` | Unit converter logic: a port of the Windows converter with its units, factors, rounding and region defaults; paste; unit tests. No UI code. |
 | `src/locale.rs` | Regional number formats (decimal separator, digit grouping) and date patterns; unit tests. No UI code. |
@@ -175,19 +209,20 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/app/palette.rs` | The dark and light color palettes |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
 | `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
+| `src/app/programmer_view.rs` | User interface of the programmer mode: radix list, word size, Bitwise and Bit shift menus, keypad, bit toggling keypad |
 | `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1`, and CalcCraft's own few in `calccraft.txt` |
-| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png`, `docs/unit-converter.png` | The screenshots shown above |
+| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png`, `docs/programmer.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
 | `CLAUDE.md` | Entry point for Claude Code (imports `AGENTS.md`) |
 
 ## Differences from Windows Calculator
 
-- The Standard and Date calculation modes and 12 of the 13 converters exist. The scientific,
-  graphing and programmer modes and the Currency converter are not implemented.
+- The Standard, Programmer and Date calculation modes and 12 of the 13 converters exist. The
+  scientific and graphing modes and the Currency converter are not implemented.
 - Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle)
-  are similar Segoe Fluent Icons glyphs: Windows draws them from the Calculator's own icon font,
-  which can't be used outside Windows.
+  and the Programmer mode's icons are similar Segoe Fluent Icons glyphs or drawn in code:
+  Windows draws them from the Calculator's own icon font, which can't be used outside Windows.
 - Dates always use the Gregorian calendar, even in regions that use another one.
 - The palettes are fixed: both themes use the purple tint and accent color of the reference
   screenshots. Windows tints its window with the Mica effect and your own accent color.
