@@ -126,6 +126,8 @@ This is an independent hobby project. It is not affiliated with or endorsed by M
 Windows and Segoe are trademarks of Microsoft. The fonts are loaded from your Windows
 installation and are not part of this repository.
 
-## License
+## Acknowledgements & Credits
 
-No license has been chosen yet.
+This project is heavily inspired by and builds upon the architecture and logic of the official [Microsoft Calculator](https://github.com/Microsoft/calculator) repository, licensed under the [MIT License](https://github.com/microsoft/calculator/blob/main/LICENSE).
+
+We gratefully acknowledge Microsoft and the contributors of the original project for their work.
