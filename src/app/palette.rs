@@ -22,6 +22,12 @@ pub(super) struct Palette {
     pub accent_hover: Color32,
     pub accent_pressed: Color32,
     pub accent_disabled: Color32,
+    /// The Scientific mode's second functions while `2nd` is on, hovered and pressed
+    /// (`EmphasizedCalcButtonStyle`: the system accent color, at 90 % on hover), and their
+    /// text then (`SystemControlForegroundBaseHighBrush`).
+    pub emphasized_hover: Color32,
+    pub emphasized_pressed: Color32,
+    pub text_on_emphasized: Color32,
     /// Transparent buttons (memory row, header icons) on hover and press.
     pub subtle_hover: Color32,
     pub subtle_pressed: Color32,
@@ -114,6 +120,9 @@ const ACCENT_LIGHT_3: Color32 = Color32::from_rgb(0xF0, 0xC0, 0xF4);
 const ACCENT_LIGHT_2: Color32 = Color32::from_rgb(0xDB, 0x9E, 0xE5);
 const ACCENT_DARK_1: Color32 = Color32::from_rgb(0x8E, 0x3A, 0xA7);
 const ACCENT_DARK_2: Color32 = Color32::from_rgb(0x69, 0x27, 0x82);
+/// The accent color itself (`SystemAccentColor`), between Light 1 and Dark 1: an
+/// estimate, since the reference screenshots don't show it.
+const ACCENT_BASE: Color32 = Color32::from_rgb(0xA8, 0x4C, 0xC0);
 
 const DARK_BACKGROUND: Color32 = Color32::from_rgb(0x29, 0x1A, 0x29);
 /// Not sampled: Mica in light mode with the same purple wallpaper tint.
@@ -133,6 +142,9 @@ pub(super) const DARK: Palette = Palette {
     accent_hover: over(DARK_BACKGROUND, ACCENT_LIGHT_2, 0.9),
     accent_pressed: over(DARK_BACKGROUND, ACCENT_LIGHT_2, 0.8),
     accent_disabled: white(DARK_BACKGROUND, 0.1581),
+    emphasized_hover: over(DARK_BACKGROUND, ACCENT_BASE, 0.9),
+    emphasized_pressed: ACCENT_BASE,
+    text_on_emphasized: Color32::WHITE,
     subtle_hover: white(DARK_BACKGROUND, 0.0605),
     subtle_pressed: white(DARK_BACKGROUND, 0.0419),
     border: Color32::from_rgb(0x38, 0x2A, 0x39),
@@ -198,6 +210,9 @@ pub(super) const LIGHT: Palette = Palette {
     accent_hover: over(LIGHT_BACKGROUND, ACCENT_DARK_1, 0.9),
     accent_pressed: over(LIGHT_BACKGROUND, ACCENT_DARK_1, 0.8),
     accent_disabled: black(LIGHT_BACKGROUND, 0.2169),
+    emphasized_hover: over(LIGHT_BACKGROUND, ACCENT_BASE, 0.9),
+    emphasized_pressed: ACCENT_BASE,
+    text_on_emphasized: Color32::BLACK,
     subtle_hover: black(LIGHT_BACKGROUND, 0.0373),
     subtle_pressed: black(LIGHT_BACKGROUND, 0.0241),
     border: black(LIGHT_BACKGROUND, 0.0578),
