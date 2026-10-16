@@ -22,7 +22,8 @@ and the user-facing changes that are welcome are the ones that bring the app clo
 
 **Definition of done:** `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and
 `cargo test` all pass, and UI changes have been checked by actually running the app
-(see "Verifying UI changes").
+(see "Verifying UI changes"). CI (`.github/workflows/ci.yml`) runs the same three commands on
+`windows-latest` for every push and pull request, and a pull request isn't done until it passes.
 
 ## Architecture
 
@@ -132,3 +133,6 @@ Unit tests don't cover the UI. After visual or interaction changes:
   commit to one topic.
 - In the PR description, say what changed, why, and how you verified it (tests and manual
   checks). Include before/after screenshots for UI changes.
+- Pushing a `v*` tag publishes a GitHub release (`.github/workflows/release.yml`, see "Releasing"
+  in the README). The tag must match `version` in `Cargo.toml`. Don't create or push tags unless
+  a maintainer asks.

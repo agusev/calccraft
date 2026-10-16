@@ -64,9 +64,28 @@ cargo fmt --check                           # formatting
 cargo clippy --all-targets -- -D warnings   # lints
 ```
 
-All three must pass before a change is merged. Contributors (people and AI agents alike)
+All three must pass before a change is merged.
+[GitHub Actions](.github/workflows/ci.yml) runs them on Windows for every push and pull request.
+Contributors (people and AI agents alike)
 should read [AGENTS.md](AGENTS.md) first: it describes the architecture, the Windows behaviors
 that the tests pin down, and known pitfalls.
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, merge that change, then push a tag with the same version:
+
+```bash
+git tag v1.0.0
+```
+
+```bash
+git push origin v1.0.0
+```
+
+The [release workflow](.github/workflows/release.yml) checks that the tag matches `Cargo.toml`,
+runs the tests, builds the release executable on Windows and publishes a GitHub release with
+`calculator-v1.0.0-windows-x64.exe`, its SHA-256 checksum and generated release notes.
+Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 
 ## Project layout
 
@@ -76,6 +95,7 @@ that the tests pin down, and known pitfalls.
 | `src/engine.rs` | Calculator logic: input state machine, exact arithmetic, number formatting, memory, history, unit tests. No UI code. |
 | `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels, menu, keyboard handling, fonts, title bar tint |
 | `docs/screenshot.png` | The screenshot shown above |
+| `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
 | `CLAUDE.md` | Entry point for Claude Code (imports `AGENTS.md`) |
 

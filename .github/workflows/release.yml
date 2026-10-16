@@ -1,0 +1,59 @@
+name: Release
+
+# Pushing a tag such as v1.0.0 builds the Windows executable and publishes it as a GitHub release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the release and upload its files
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Catches a forgotten version bump before anything is published.
+      - name: Check that the tag matches Cargo.toml
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            "::error::Tag $env:GITHUB_REF_NAME does not match version $version in Cargo.toml."
+            exit 1
+          }
+
+      # CI runs on the same tag in parallel, but nothing stops it from publishing a failing build.
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          $asset = "calculator-$env:GITHUB_REF_NAME-windows-x64.exe"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/calculator.exe "dist/$asset"
+          $hash = (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower()
+          # sha256sum format with an LF ending (a CRLF breaks `sha256sum -c`).
+          Set-Content "dist/$asset.sha256" "$hash  $asset`n" -NoNewline
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $flags = @('--title', $env:GITHUB_REF_NAME, '--generate-notes', '--verify-tag')
+          # Tags with a suffix, such as v1.0.0-beta.1, become pre-releases.
+          if ($env:GITHUB_REF_NAME.Contains('-')) { $flags += '--prerelease' }
+          $files = (Get-ChildItem dist).FullName
+          gh release create $env:GITHUB_REF_NAME @flags @files
