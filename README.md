@@ -24,6 +24,14 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   16 significant digits, Windows' rules for scientific notation, and the same error messages
   (`Cannot divide by zero`, `Result is undefined`, `Invalid input`, `Overflow`).
 - **Keyboard and clipboard:** see the shortcuts below. `Ctrl+C` / `Ctrl+V` copy and paste numbers.
+- **Date calculation mode** (open the ☰ menu):
+  - **Difference between dates:** the difference broken into years, months, weeks and days,
+    plus the total number of days (`4 years, 4 months, 4 days`, `1587 days`).
+  - **Add or subtract days:** add years, months and days (0–999 each) to a date, or subtract them.
+  - The date pickers open a calendar with month, year and decade views. It works with the
+    arrows and the mouse wheel, and supports dates from 1601 to 9999, like Windows.
+
+![Screenshot of the date calculation mode](docs/date-calculation.png)
 
 ## Keyboard shortcuts
 
@@ -44,6 +52,8 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `Ctrl+H` | Show or hide history |
 | `Ctrl+Shift+D` | Clear history |
 | `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number |
+
+In the date calculation mode, `Esc` closes the open calendar or list, and `Ctrl+C` copies the result.
 
 ## Requirements
 
@@ -66,7 +76,7 @@ handy for logging.
 ## Development
 
 ```bash
-cargo test                                  # engine tests
+cargo test                                  # calculator and date tests
 cargo fmt --check                           # formatting
 cargo clippy --all-targets -- -D warnings   # lints
 ```
@@ -100,16 +110,21 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | --- | --- |
 | `src/main.rs` | Entry point: window options and the generated window icon |
 | `src/engine.rs` | Calculator logic: input state machine, exact arithmetic, number formatting, memory, history, unit tests. No UI code. |
+| `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
 | `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels, menu, Settings, keyboard handling, fonts, title bar tint |
 | `src/app/palette.rs` | The dark and light color palettes |
-| `docs/screenshot.png`, `docs/screenshot-light.png` | The screenshots shown above |
+| `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
+| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
 | `CLAUDE.md` | Entry point for Claude Code (imports `AGENTS.md`) |
 
 ## Differences from Windows Calculator
 
-- Only the Standard mode exists. Scientific, programmer, date and converter modes are not implemented.
+- Only the Standard and Date calculation modes exist. The scientific, graphing, programmer and
+  converter modes are not implemented.
+- Dates always use the Gregorian calendar, en-US formats (`October 15, 2026`) and weeks that
+  start on Sunday, whatever the system settings.
 - The palettes are fixed: both themes use the purple tint and accent color of the reference
   screenshots. Windows tints its window with the Mica effect and your own accent color.
   The light background is an estimate, not a sample.

@@ -1,5 +1,6 @@
 //! User interface styled after the Windows 11 calculator, in a dark or light theme.
 
+mod date_view;
 mod palette;
 
 use std::sync::Arc;
@@ -24,6 +25,7 @@ const ICON_BACK: char = '\u{E72B}';
 const ICON_DELETE: char = '\u{E74D}';
 const ICON_THEME: char = '\u{E790}';
 const ICON_HISTORY: char = '\u{E81C}';
+const ICON_CALENDAR: char = '\u{E787}';
 const ICON_CALCULATOR: char = '\u{E8EF}';
 const ICON_MULTIPLY: char = '\u{E947}';
 const ICON_PLUS: char = '\u{E948}';
@@ -55,6 +57,24 @@ enum Flyout {
     History,
     Memory,
     Navigation,
+}
+
+/// Calculator mode, picked in the navigation menu.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Standard,
+    DateCalculation,
+}
+
+impl Mode {
+    const ALL: [Mode; 2] = [Mode::Standard, Mode::DateCalculation];
+
+    fn title(self) -> &'static str {
+        match self {
+            Mode::Standard => "Standard",
+            Mode::DateCalculation => "Date calculation",
+        }
+    }
 }
 
 /// What fills the window: the calculator or, as in Windows, the Settings page instead.
@@ -117,7 +137,9 @@ enum Kind {
 }
 
 pub struct CalculatorApp {
+    mode: Mode,
     calc: Calculator,
+    date: date_view::DateState,
     flyout: Flyout,
     /// "Keep on top" mode: a small always-on-top window without the memory row.
     compact: bool,
@@ -159,7 +181,9 @@ impl CalculatorApp {
             TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
         );
         Self {
+            mode: Mode::Standard,
             calc: Calculator::default(),
+            date: date_view::DateState::new(),
             flyout: Flyout::None,
             compact: false,
             full_size: None,
@@ -178,6 +202,13 @@ impl CalculatorApp {
     fn set_theme(&mut self, ctx: &Context, theme: Theme) {
         self.theme = theme;
         ctx.set_theme(theme.preference());
+    }
+
+    fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.page = Page::Calculator;
+        self.flyout = Flyout::None;
+        self.date.close_popup();
     }
 
     // -------------------------------------------------------------- keyboard
@@ -404,10 +435,14 @@ impl CalculatorApp {
         let title = ui.painter().text(
             pos2(rect.left() + 48.0, y),
             Align2::LEFT_CENTER,
-            "Standard",
+            self.mode.title(),
             FontId::new(20.0, semibold()),
             p.text,
         );
+        // Keep on top and history exist only in the Standard mode.
+        if self.mode != Mode::Standard {
+            return;
+        }
 
         let label = self.icon(ICON_KEEP_ON_TOP, "⇲", 14.0);
         let keep_on_top = icon_button(title.right() + 26.0);
@@ -854,13 +889,24 @@ impl CalculatorApp {
             FontId::new(14.0, semibold()),
             p.text,
         );
-        // The only mode is "Standard", and it is selected.
-        let item = Rect::from_min_size(
-            pos2(panel.left() + 4.0, panel.top() + HEADER_HEIGHT + 34.0),
-            vec2(panel.width() - 8.0, 40.0),
-        );
-        let icon = self.icon(ICON_CALCULATOR, "▦", 16.0);
-        close |= self.nav_item(ui, item, Id::new("nav-standard"), icon, "Standard", true);
+        for (i, mode) in Mode::ALL.into_iter().enumerate() {
+            let item = Rect::from_min_size(
+                pos2(
+                    panel.left() + 4.0,
+                    panel.top() + HEADER_HEIGHT + 34.0 + i as f32 * 40.0,
+                ),
+                vec2(panel.width() - 8.0, 40.0),
+            );
+            let icon = match mode {
+                Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
+                Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
+            };
+            let id = Id::new("nav-mode").with(i);
+            if self.nav_item(ui, item, id, icon, mode.title(), self.mode == mode) {
+                self.set_mode(mode);
+                close = true;
+            }
+        }
 
         // Settings sits at the bottom of the pane, below a separator, as in Windows.
         let item = Rect::from_min_size(
@@ -1209,13 +1255,27 @@ impl eframe::App for CalculatorApp {
             self.title_bar.apply(theme);
             self.title_bar_theme = Some(theme);
         }
-        self.handle_keyboard(&ctx);
+        if self.page == Page::Calculator && self.mode == Mode::DateCalculation {
+            self.handle_date_keyboard(&ctx);
+        } else {
+            self.handle_keyboard(&ctx);
+        }
         let now = ctx.input(|i| i.time);
 
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, self.palette.background);
         if self.page == Page::Settings {
             self.draw_settings(ui, full);
+            return;
+        }
+
+        if self.mode == Mode::DateCalculation {
+            let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
+            self.draw_header(ui, header);
+            self.draw_date_mode(ui, full, header.bottom());
+            if self.flyout == Flyout::Navigation {
+                self.draw_navigation(ui, full);
+            }
             return;
         }
 

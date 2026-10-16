@@ -48,6 +48,25 @@ pub(super) struct Palette {
     pub link: Color32,
     pub link_hover: Color32,
     pub link_pressed: Color32,
+    /// Drop-down lists of the date calculation mode.
+    pub popup: Color32,
+    pub popup_item: Color32,
+    pub popup_item_pressed: Color32,
+    pub popup_border: Color32,
+    pub popup_shadow: Color32,
+    /// The calendar of the date pickers.
+    pub calendar: Color32,
+    pub calendar_header: Color32,
+    pub calendar_line: Color32,
+    pub calendar_hover: Color32,
+    pub calendar_pressed: Color32,
+    pub calendar_arrow: Color32,
+    pub other_month: Color32,
+    /// The years, months and days boxes.
+    pub control: Color32,
+    pub control_hover: Color32,
+    pub control_pressed: Color32,
+    pub control_border: Color32,
 }
 
 /// `color` at `opacity` over `base`, as an opaque color.
@@ -115,6 +134,24 @@ pub(super) const DARK: Palette = Palette {
     link: ACCENT_LIGHT_3,
     link_hover: over(DARK_BACKGROUND, ACCENT_LIGHT_3, 0.8),
     link_pressed: over(DARK_BACKGROUND, ACCENT_LIGHT_3, 0.6),
+    // Sampled from screenshots of the Windows 11 date calculator.
+    popup: Color32::from_rgb(0x2F, 0x2A, 0x34),
+    popup_item: Color32::from_rgb(0x3C, 0x37, 0x40),
+    popup_item_pressed: Color32::from_rgb(0x36, 0x31, 0x3A),
+    popup_border: Color32::from_rgb(0x48, 0x3F, 0x4C),
+    popup_shadow: Color32::from_black_alpha(100),
+    calendar: Color32::from_rgb(0x3B, 0x31, 0x3F),
+    calendar_header: Color32::from_rgb(0x32, 0x2A, 0x36),
+    calendar_line: Color32::from_rgb(0x2C, 0x25, 0x30),
+    calendar_hover: Color32::from_rgb(0x47, 0x3D, 0x4B),
+    calendar_pressed: Color32::from_rgb(0x41, 0x37, 0x45),
+    calendar_arrow: Color32::from_rgb(0xA1, 0x9D, 0xA2),
+    other_month: Color32::from_rgb(0xA8, 0xA1, 0xA9),
+    // WinUI control fills: white at 5.9 %, 8.2 % and 3.1 %.
+    control: white(DARK_BACKGROUND, 0.059),
+    control_hover: white(DARK_BACKGROUND, 0.082),
+    control_pressed: white(DARK_BACKGROUND, 0.031),
+    control_border: Color32::from_rgb(0x44, 0x36, 0x44),
 };
 
 pub(super) const LIGHT: Palette = Palette {
@@ -152,6 +189,24 @@ pub(super) const LIGHT: Palette = Palette {
     link: ACCENT_DARK_2,
     link_hover: over(LIGHT_BACKGROUND, ACCENT_DARK_2, 0.8),
     link_pressed: over(LIGHT_BACKGROUND, ACCENT_DARK_2, 0.6),
+    // Not sampled: WinUI light flyouts, list items and controls over the light background.
+    popup: white(LIGHT_BACKGROUND, 0.6),
+    popup_item: black(LIGHT_BACKGROUND, 0.0373),
+    popup_item_pressed: black(LIGHT_BACKGROUND, 0.0241),
+    popup_border: black(LIGHT_BACKGROUND, 0.0578),
+    popup_shadow: Color32::from_black_alpha(40),
+    calendar: white(LIGHT_BACKGROUND, 0.7),
+    calendar_header: white(LIGHT_BACKGROUND, 0.3),
+    calendar_line: black(LIGHT_BACKGROUND, 0.0578),
+    calendar_hover: black(LIGHT_BACKGROUND, 0.0373),
+    calendar_pressed: black(LIGHT_BACKGROUND, 0.0241),
+    calendar_arrow: black(LIGHT_BACKGROUND, 0.4458),
+    other_month: black(LIGHT_BACKGROUND, 0.4458),
+    // WinUI control fills: white at 70 %, 50 % and 30 %.
+    control: white(LIGHT_BACKGROUND, 0.7),
+    control_hover: white(LIGHT_BACKGROUND, 0.5),
+    control_pressed: white(LIGHT_BACKGROUND, 0.3),
+    control_border: black(LIGHT_BACKGROUND, 0.0578),
 };
 
 #[cfg(test)]
