@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 
 use super::graphing_view::{Capture, Popup, Purpose, edit_id, paint_graph_icon};
+use super::icons::{ICON_MINUS, ICON_PLUS, ICON_SETTINGS, ICON_SHARE, icon_label};
 use super::palette::{GraphPalette, Palette};
 use super::strings::{tr, tr_format};
 use super::{CalculatorApp, RADIUS, access, numbers, share};
@@ -19,10 +20,6 @@ use crate::graphing::{Env, Equation};
 
 /// The tracing button's id; it gets the focus back when Esc stops tracing.
 pub(super) const TRACE_ID: &str = "graph-trace";
-const ICON_SHARE: char = '\u{E72D}';
-const ICON_PLUS: char = '\u{E948}';
-const ICON_MINUS: char = '\u{E949}';
-const ICON_GEAR: char = '\u{E713}';
 
 /// The plots of a frame, and what they were made for: they're made again only when the
 /// view, the size, the equations or the variables change.
@@ -220,10 +217,12 @@ impl CalculatorApp {
                 at = pointer.to_pos2();
                 ctx.set_cursor_icon(CursorIcon::None);
             }
-            let typing = ctx
+            // The arrow keys are the graph's only while it has the focus (`OnCoreKeyDown`)
+            // or nothing has: in a text box or on a slider or a button they're its own.
+            let graph_keys = ctx
                 .memory(|m| m.focused())
-                .is_some_and(|f| self.graphing.rows.iter().any(|r| edit_id(r.id) == f));
-            if !typing {
+                .is_none_or(|f| response.as_ref().is_some_and(|r| r.id == f));
+            if graph_keys {
                 if let Some(response) = &response
                     && response.has_focus()
                 {
@@ -352,13 +351,14 @@ impl CalculatorApp {
         let target = trace_at.or(pointer.map(|p| p.to_pos2()));
         let mut traced = None;
         if let (Some(target), Some(cache)) = (target, &self.graphing.cache) {
-            let pairs: Vec<(&Equation, &Plot)> = cache
+            // The row of each pair: `point.equation` counts the pairs, not the plots.
+            let (rows, pairs): (Vec<usize>, Vec<(&Equation, &Plot)>) = cache
                 .plots
                 .iter()
-                .filter_map(|(i, plot)| self.graphing.rows[*i].graphable().map(|e| (e, plot)))
-                .collect();
+                .filter_map(|(i, plot)| self.graphing.rows[*i].graphable().map(|e| (*i, (e, plot))))
+                .unzip();
             if let Some(point) = plot::trace(&pairs, &env, &view, w, h, target.x, target.y) {
-                let index = cache.plots[point.equation].0;
+                let index = rows[point.equation];
                 traced = Some((point, gp.equations[self.graphing.rows[index].color]));
             }
         }
@@ -599,7 +599,7 @@ impl CalculatorApp {
         .on_hover_text(tr("shareButton.ToolTip"));
         let (fill, color) = panel_button_colors(p, &response, false);
         painter.rect_filled(r, RADIUS, fill);
-        let icon = painter.layout_job(self.icon(ICON_SHARE, "⇪", 16.0));
+        let icon = painter.layout_job(icon_label(ICON_SHARE, 16.0));
         painter.galley(r.center() - icon.size() / 2.0, icon, color);
         if response.clicked() {
             self.graphing.capture = Capture::Requested(Purpose::Share);
@@ -622,7 +622,7 @@ impl CalculatorApp {
         let (fill, color) = panel_button_colors(p, &response, false);
         painter.rect_filled(r, RADIUS, if open { p.subtle_hover } else { fill });
         paint_graph_icon(&painter, r.center() - vec2(1.0, 1.0), 15.0, color);
-        let gear = painter.layout_job(self.icon(ICON_GEAR, "⚙", 9.0));
+        let gear = painter.layout_job(icon_label(ICON_SETTINGS, 9.0));
         painter.rect_filled(
             Rect::from_center_size(r.center() + vec2(5.0, 4.5), vec2(9.0, 9.0)),
             4.5,
@@ -658,17 +658,15 @@ impl CalculatorApp {
         let size = (rect.width(), rect.height());
         for (i, zoom_in) in [(0.0, true), (1.0, false)] {
             let r = cell(bottom, i, true);
-            let (glyph, fallback, key, tip) = if zoom_in {
+            let (glyph, key, tip) = if zoom_in {
                 (
                     ICON_PLUS,
-                    "+",
                     "zoomInButton.AutomationName",
                     "zoomInButton.ToolTip",
                 )
             } else {
                 (
                     ICON_MINUS,
-                    "−",
                     "zoomOutButton.AutomationName",
                     "zoomOutButton.ToolTip",
                 )
@@ -679,7 +677,7 @@ impl CalculatorApp {
                     .on_hover_text(tr(tip));
             let (fill, color) = panel_button_colors(p, &response, false);
             painter.rect_filled(r, RADIUS, fill);
-            let icon = painter.layout_job(self.icon(glyph, fallback, 14.0));
+            let icon = painter.layout_job(icon_label(glyph, 14.0));
             painter.galley(r.center() - icon.size() / 2.0, icon, color);
             let down = response.is_pointer_button_down_on();
             if response.drag_started() || (down && self.graphing.zoom_held.is_none()) {
@@ -921,6 +919,31 @@ mod tests {
         assert_eq!(x.to_string(), "3.82");
         assert_eq!(trace_text(x, x * x), "(3.82, 14.592400000000000)");
         assert_eq!(rounded(1234.0, 10.0), 1230.0);
+    }
+
+    #[test]
+    fn reparsed_equations_are_plotted_again() {
+        use crate::app::graphing_view::GraphingState;
+        use crate::graphing::Syntax;
+        let mut g = GraphingState::new();
+        // A decimal comma is an error in en-US, a number in de-DE.
+        g.rows[0].text = "y=1,5x".into();
+        g.submit(0, Syntax::default());
+        assert!(g.rows[0].graphable().is_none());
+        g.cache = Some(PlotCache {
+            key: CacheKey {
+                view: View::DEFAULT,
+                size: (100.0, 100.0),
+                angle: Angle::Radians,
+                rows: vec![(g.rows[0].id, g.rows[0].submitted.clone(), true)],
+                values: Vec::new(),
+            },
+            plots: Vec::new(),
+        });
+        g.reparse(Syntax::for_decimal(','));
+        assert!(g.rows[0].graphable().is_some());
+        // Same text, so the cache's key would match: it has to go.
+        assert!(g.cache.is_none());
     }
 
     #[test]

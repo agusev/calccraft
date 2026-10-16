@@ -29,11 +29,15 @@ impl Default for NumberFormat {
 }
 
 impl NumberFormat {
-    /// A format from Windows' settings; an empty decimal separator falls back to `.`.
+    /// A format from Windows' settings. Windows Settings allow separators of up to three
+    /// characters, but the Windows Calculator keeps only the first one
+    /// (`LocalizationSettings.Initialize`). An empty decimal separator falls back to `.`.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn new(decimal: &str, group: &str, grouping: &str) -> Self {
+        let first = |text: &str| text.chars().next().map(String::from);
         Self {
-            decimal: if decimal.is_empty() { "." } else { decimal }.to_string(),
-            group: group.to_string(),
+            decimal: first(decimal).unwrap_or_else(|| ".".into()),
+            group: first(group).unwrap_or_default(),
             grouping: parse_grouping(grouping),
         }
     }
@@ -69,9 +73,9 @@ impl NumberFormat {
     }
 
     /// Ungrouped en-US text (`1234.5`, what Ctrl+C copies) with the region's decimal
-    /// separator.
+    /// separator: the same change as for the expression line.
     pub fn localize_plain(&self, en_us: &str) -> String {
-        en_us.replace('.', &self.decimal)
+        self.localize_expression(en_us)
     }
 
     /// Pasted text in this format, for the engine's en-US paste rules: without the group
@@ -93,6 +97,7 @@ impl NumberFormat {
 /// Windows' grouping string (`LOCALE_SGROUPING`) as a list, like the engine's
 /// `DigitGroupingStringToGroupingVector`: `3;0` groups every 3 digits, `3;2;0` is 3 and
 /// then every 2 (India), `3` groups only the first 3, and `0;0` doesn't group.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn parse_grouping(grouping: &str) -> Vec<u32> {
     grouping
         .split(';')
@@ -140,6 +145,7 @@ fn group_digits(digits: &str, separator: &str, grouping: &[u32]) -> String {
 /// The date pickers' pattern ("day month year", like `October 15, 2026` in en-US) from
 /// the region's long date pattern (`LOCALE_SLONGDATE`, like `dddd, MMMM d, yyyy`):
 /// the long date without the day of the week and the separators next to it.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn without_weekday(pattern: &str) -> String {
     // Find `ddd` or `dddd` outside quoted text.
     let chars: Vec<char> = pattern.chars().collect();
@@ -176,6 +182,11 @@ pub fn without_weekday(pattern: &str) -> String {
         while before > 0 && is_separator(chars[before - 1]) {
             before -= 1;
         }
+    } else if before > 0 && chars[before - 1] == '\'' && chars[after] == '\'' {
+        // Quoted text on both sides (th-TH's `'วัน'dddd'ที่'`) becomes one quote: the two
+        // quotes left in a row would be an apostrophe.
+        before -= 1;
+        after += 1;
     }
     chars[..before].iter().chain(&chars[after..]).collect()
 }
@@ -240,6 +251,19 @@ mod tests {
         );
     }
 
+    /// Windows Settings take separators of up to three characters; the calculator uses
+    /// only the first one.
+    #[test]
+    fn separators_are_one_character() {
+        let custom = NumberFormat::new(",;", "_-", "3;0");
+        assert_eq!(custom, NumberFormat::new(",", "_", "3;0"));
+        assert_eq!(custom.localize("1,234,567.5"), "1_234_567,5");
+        assert_eq!(custom.localize_expression("1234.5"), "1234,5");
+        assert_eq!(custom.delocalize("1_234,5"), "1234.5");
+        // An empty group separator still means no grouping.
+        assert_eq!(NumberFormat::new(".", "", "3;0").localize("1,234"), "1234");
+    }
+
     #[test]
     fn expression_and_copy() {
         let de = german();
@@ -271,6 +295,12 @@ mod tests {
             "d' de 'MMMM' de 'yyyy"
         );
         assert_eq!(without_weekday("d MMMM yyyy, dddd"), "d MMMM yyyy");
+        // Text quoted on both sides of the day of the week joins into one quote: two quotes
+        // in a row would be an apostrophe (th-TH, `วันที่ 15 ตุลาคม 2026`).
+        assert_eq!(
+            without_weekday("'วัน'dddd'ที่' d MMMM yyyy"),
+            "'วันที่' d MMMM yyyy"
+        );
         assert_eq!(without_weekday("yyyy'年'M'月'd'日'"), "yyyy'年'M'月'd'日'");
         // A quoted "ddd" is text, not the day of the week.
         assert_eq!(without_weekday("'dddd' d MMMM"), "'dddd' d MMMM");

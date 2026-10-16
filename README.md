@@ -155,7 +155,7 @@ In the scientific mode, these keys are added (Windows' own):
 | `!`, `\|`, `[`, `]` | `n!`, `\|x\|`, `⌊x⌋`, `⌈x⌉` |
 | `%` | `mod` |
 | `P`, `Shift+E`, `Shift+R` | `π`, `e`, `rand` |
-| `X`, `V` | `exp`, `F-E` |
+| `X` or `E`, `V` | `exp`, `F-E` |
 | `M` | `→dms` |
 | `R` | Reciprocal (`1/x`) |
 | `F4` / `F5` / `F3` | Radians / gradians / degrees (as in Windows, each is the key of the unit button before it) |
@@ -195,13 +195,20 @@ value, `Ctrl+V` pastes a number, and `Esc` closes an open unit list.
 ## Requirements
 
 - **Windows 10 or 11.** The app was developed and tested on Windows 11. It loads Segoe UI
-  (regular, semibold and light), Segoe UI Symbol and Segoe Fluent Icons (or Segoe MDL2 Assets
-  on Windows 10) from `%WINDIR%\Fonts`.
-  Other platforms should build, using egui's default fonts and a plain title bar, but nobody
-  has tested them.
+  (regular, semibold and light) and Segoe UI Symbol from `%WINDIR%\Fonts`. Its icons
+  ([Fluent System Icons](https://github.com/microsoft/fluentui-system-icons)) are built into the
+  executable, and so is [Inter](https://fonts.google.com/specimen/Inter), which takes Segoe UI's
+  place where it's missing.
+- **Linux and macOS (x64)** get release builds too, with Inter, a plain title bar and en-US
+  regional formats, but Windows is the platform CalcCraft is made for. The Linux build needs X11 or
+  Wayland and OpenGL, as any desktop has. The macOS app isn't notarized: open it the first time
+  with right-click → Open (or remove the quarantine flag with `xattr -dr com.apple.quarantine
+  CalcCraft.app`).
 - **Rust 1.95 or newer** (edition 2024; eframe 0.36 needs at least 1.95).
-- **Windows SDK** for `rc.exe`, which embeds the icon into the executable. It comes with the
+- **Windows SDK** (on Windows) for `rc.exe`, which embeds the icon into the executable. It comes with the
   Visual Studio C++ build tools that Rust on Windows needs anyway.
+- **On Linux,** eframe's build dependencies:
+  `sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev`.
 
 ## Build and run
 
@@ -209,8 +216,8 @@ value, `Ctrl+V` pastes a number, and `Esc` closes an open unit list.
 cargo run --release
 ```
 
-The executable is `target/release/calculator.exe`. Release builds use the Windows GUI
-subsystem, so no console window appears. Debug builds (`cargo run`) keep the console, which is
+The executable is `target/release/calculator.exe` (`calculator` on Linux and macOS). Release
+builds use the Windows GUI subsystem, so no console window appears. Debug builds (`cargo run`) keep the console, which is
 handy for logging.
 
 ## Development
@@ -252,10 +259,18 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The [release workflow](.github/workflows/release.yml) checks that the tag matches `Cargo.toml`,
-runs the tests, builds the release executable on Windows and publishes a GitHub release with
-`calculator-v1.0.0-windows-x64.exe`, its SHA-256 checksum and generated release notes.
-Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
+The [release workflow](.github/workflows/release.yml) checks that the tag matches `Cargo.toml`
+and creates a draft release with generated release notes. Then it runs the tests and builds the
+app on Windows, Linux and macOS, all x64, and uploads each with its SHA-256 checksum:
+
+| Platform | File |
+| --- | --- |
+| Windows | `calculator-v1.0.0-windows-x64.exe` |
+| Linux | `calculator-v1.0.0-linux-x64.tar.gz` (the `calculator` executable) |
+| macOS | `calculator-v1.0.0-macos-x64.zip` (`CalcCraft.app`, signed ad hoc, cross-compiled on Apple silicon) |
+
+The draft is published only when all three are there. Tags with a suffix, such as
+`v1.0.0-beta.1`, are published as pre-releases.
 
 ## Project layout
 
@@ -276,6 +291,7 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/app/strings.rs` | The interface's text in the user's language, from `locales/` |
 | `src/app/region.rs` | The user's regional formats, read from Windows |
 | `src/app/palette.rs` | The dark and light color palettes |
+| `src/app/icons.rs` | The icons: code points of the embedded icon font |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
 | `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
 | `src/app/scientific_view.rs` | User interface of the scientific mode: angle unit and F-E, Trigonometry and Function menus, keypad with `2nd` |
@@ -283,6 +299,8 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/app/graphing_view.rs` | User interface of the graphing mode: layout, equation boxes, variable sliders, function analysis, graph options and line options |
 | `src/app/graph_canvas.rs` | The graphing mode's graph: grid, axes, lines and regions, tracing, the buttons over the graph, copying it |
 | `src/app/graphing_keypad.rs` | The graphing mode's keypad and its Trigonometry, Inequalities and Function menus |
+| `assets/fonts/` | The fonts built into the executable: the icon font and Inter, with their licenses |
+| `tools/icon-font.py` | Builds the icon font from Fluent System Icons (`uv run tools/icon-font.py`) |
 | `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1`, and CalcCraft's own few in `calccraft.txt` |
 | `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/scientific.png`, `docs/date-calculation.png`, `docs/programmer.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
@@ -303,10 +321,12 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
     similar ones elsewhere.
   - A share's title is "CalcCraft" instead of Windows' "Look what I graphed with Windows
     Calculator".
-- Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle),
-  the Programmer mode's icons and the Scientific mode's key labels (`x²`, `xʸ`, `2ⁿᵈ`, …) and
-  menu icons are similar Segoe Fluent Icons glyphs, Segoe UI text or drawn in code: Windows draws
-  them from the Calculator's own icon font, which can't be used outside Windows.
+- The icons are Fluent System Icons built into the app, not Windows' Segoe Fluent Icons: they
+  are the same designs in most places, but not every line is identical. Six converter icons in
+  the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle), the Programmer mode's icons
+  and the Scientific mode's key labels (`x²`, `xʸ`, `2ⁿᵈ`, …) and menu icons are similar icons,
+  Segoe UI text or drawn in code: Windows draws them from the Calculator's own icon font, which
+  can't be used outside Windows.
 - The Scientific mode computes its functions with about 120 digits and keeps 40, so the 32
   digits it shows are those of the exact result. Windows computes with about 32 digits, so some
   of its results may differ in the last digit.
@@ -321,9 +341,8 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
   Hindi, Kannada, Malayalam, Tamil, Telugu, Khmer and Lao users get the next language in their
   Windows language list, or English. Numbers always use Western digits, and the interface is
   never mirrored.
-- The contribute sentence on the Settings page, the menu button's screen reader names and the
-  calendar's arrows stay English: Windows takes them from places outside the Calculator's own
-  translations.
+- The menu button's screen reader names and the calendar's arrows stay English: Windows takes
+  them from places outside the Calculator's own translations.
 - Pasted text loses its group separators before the decimal separator becomes a point. Windows
   does it the other way round, which loses the decimal point where the group separator is a point
   (`1,5` pastes as `15` with German formats).
@@ -332,12 +351,16 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 ## Disclaimer
 
 This is an independent hobby project. It is not affiliated with or endorsed by Microsoft.
-Windows and Segoe are trademarks of Microsoft. The fonts are loaded from your Windows
+Windows and Segoe are trademarks of Microsoft. The Segoe fonts are loaded from your Windows
 installation and are not part of this repository.
 
 ## Acknowledgements & Credits
 
 This project is heavily inspired by and builds upon the architecture and logic of the official [Microsoft Calculator](https://github.com/Microsoft/calculator) repository, licensed under the [MIT License](https://github.com/microsoft/calculator/blob/main/LICENSE). The translations in `locales/` are taken from its resource files.
+- The icons are [Fluent System Icons](https://github.com/microsoft/fluentui-system-icons) by Microsoft, licensed under the MIT License.
+- The fallback text font is [Inter](https://rsms.me/inter/) by Rasmus Andersson, licensed under the SIL Open Font License 1.1.
+
+See [`assets/fonts/README.md`](assets/fonts/README.md) for the exact sources and license files.
 
 > **Disclaimer:** This project is an independent, community-driven port to Rust and is **not** affiliated with, endorsed by, or in any way officially connected with Microsoft Corporation.
 

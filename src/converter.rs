@@ -26,8 +26,6 @@ const OPTIMAL_DECIMAL: f64 = 1e-6;
 const MINIMUM_DECIMAL: f64 = 1e-14;
 /// Longest number that can be pasted (`MaxConverterInputLength`).
 const MAX_PASTE_LENGTH: usize = 16;
-/// What both fields show after an invalid paste.
-const PASTE_ERROR: &str = "Invalid input";
 
 /// The converters, in the order of the Windows navigation menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -62,23 +60,6 @@ impl Category {
         Category::Angle,
     ];
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Category::Volume => "Volume",
-            Category::Length => "Length",
-            Category::Weight => "Weight and mass",
-            Category::Temperature => "Temperature",
-            Category::Energy => "Energy",
-            Category::Area => "Area",
-            Category::Speed => "Speed",
-            Category::Time => "Time",
-            Category::Power => "Power",
-            Category::Data => "Data",
-            Category::Pressure => "Pressure",
-            Category::Angle => "Angle",
-        }
-    }
-
     /// Whether values can be negative. The other categories hide `±`.
     pub fn supports_negative(self) -> bool {
         matches!(
@@ -94,8 +75,18 @@ impl Category {
     /// The name saved preferences use (Windows' `FriendlyName` without spaces).
     fn key(self) -> &'static str {
         match self {
+            Category::Volume => "Volume",
+            Category::Length => "Length",
             Category::Weight => "Weight",
-            other => other.name(),
+            Category::Temperature => "Temperature",
+            Category::Energy => "Energy",
+            Category::Area => "Area",
+            Category::Speed => "Speed",
+            Category::Time => "Time",
+            Category::Power => "Power",
+            Category::Data => "Data",
+            Category::Pressure => "Pressure",
+            Category::Angle => "Angle",
         }
     }
 
@@ -715,7 +706,8 @@ impl Converter {
         self.value1_is_source
     }
 
-    /// The text of the top and bottom fields, with thousands separators.
+    /// The text of the top and bottom fields, with thousands separators (unless they
+    /// show the paste error: see `has_paste_error`).
     pub fn value1(&self) -> String {
         self.field(self.value1_is_source)
     }
@@ -724,19 +716,14 @@ impl Converter {
         self.field(!self.value1_is_source)
     }
 
-    /// Whether both fields show the paste error (`Invalid input`, in English).
+    /// Whether both fields show the paste error, Windows' `Invalid input`, instead of
+    /// their values. The UI writes it in the user's language.
     pub fn has_paste_error(&self) -> bool {
         self.paste_error
     }
 
     fn field(&self, source: bool) -> String {
-        if self.paste_error {
-            PASTE_ERROR.to_string()
-        } else if source {
-            localize(&self.current)
-        } else {
-            localize(&self.result)
-        }
+        localize(if source { &self.current } else { &self.result })
     }
 
     /// What `Ctrl+C` copies: the active value without separators.
@@ -987,11 +974,10 @@ impl Converter {
         let mut suggestions: Vec<Suggestion> = sorted(others)
             .into_iter()
             .filter_map(|(converted, i)| {
-                let rounded = round_suggestion(converted);
+                let (value, zero) = suggested_value(converted);
                 // Zeros are left out, except where values can be negative.
-                let zero = rounded.parse::<f64>().unwrap_or(0.0) == 0.0;
                 (!zero || self.category.supports_negative()).then(|| Suggestion {
-                    value: localize(&trim_trailing_zeros(&rounded)),
+                    value,
                     key: units[i].key,
                     abbreviation: units[i].abbreviation,
                     glyph: None,
@@ -1007,9 +993,9 @@ impl Converter {
             .map(|(i, c)| (value * (source / c.factor), i))
             .collect();
         let best = sorted(everyday).into_iter().find_map(|(converted, i)| {
-            let rounded = round_suggestion(converted);
-            (rounded.parse::<f64>().unwrap_or(0.0) != 0.0).then(|| Suggestion {
-                value: localize(&trim_trailing_zeros(&rounded)),
+            let (value, zero) = suggested_value(converted);
+            (!zero).then(|| Suggestion {
+                value,
                 key: comparisons[i].key,
                 abbreviation: comparisons[i].abbreviation,
                 glyph: Some((comparisons[i].glyph, comparisons[i].gap)),
@@ -1069,16 +1055,37 @@ fn convert(value: f64, (ratio, offset, offset_first): (f64, f64, bool)) -> f64 {
     }
 }
 
-/// An "About equal to" value: 2 decimals below 100, 1 below 1,000, none above.
+/// An "About equal to" value as the row shows it, and whether it rounds to 0.
+fn suggested_value(value: f64) -> (String, bool) {
+    let rounded = round_suggestion(value);
+    let zero = rounded.parse::<f64>().unwrap_or(0.0) == 0.0;
+    (localize(&trim_trailing_zeros(&rounded)), zero)
+}
+
+/// An "About equal to" value: 2 decimals below 100, 1 below 1,000, none above
+/// (`RoundSignificantDigits`).
 fn round_suggestion(value: f64) -> String {
-    let decimals = if value.abs() < 100.0 {
-        2
-    } else if value.abs() < 1000.0 {
-        1
-    } else {
-        0
+    if value.abs() < 1000.0 {
+        let decimals = if value.abs() < 100.0 { 2 } else { 1 };
+        return format!("{value:.decimals$}");
+    }
+    // The view model parses the whole number again and formats it with WinRT's
+    // `DecimalFormatter`, which writes 15 significant digits when they give the same
+    // double back, else 17, and zeros after them. From 10^17 on, that's fewer digits than
+    // the double's own (365249999999999616 shows as 365,249,999,999,999,620).
+    let whole = value.round_ties_even();
+    let mut scientific = format!("{whole:.14e}");
+    if scientific.parse::<f64>().ok() != Some(whole) {
+        scientific = format!("{whole:.16e}");
+    }
+    let Some((mantissa, exponent)) = scientific.split_once('e') else {
+        return scientific;
     };
-    format!("{value:.decimals$}")
+    let sign = if whole < 0.0 { "-" } else { "" };
+    let mut digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let length = exponent.parse::<usize>().unwrap_or(0) + 1;
+    digits.truncate(length);
+    format!("{sign}{digits:0<length$}")
 }
 
 /// Removes trailing zeros after the decimal point, and the point itself if
@@ -1475,13 +1482,11 @@ mod tests {
         assert_eq!(c.value1(), "3");
         for invalid in ["abc", "1+2", "1e5", "12345678901234567", ""] {
             assert!(!c.paste(invalid), "{invalid:?}");
-            assert_eq!(
-                (c.value1(), c.value2()),
-                (PASTE_ERROR.into(), PASTE_ERROR.into())
-            );
+            assert!(c.has_paste_error(), "{invalid:?}");
         }
         // The next key shows the values again.
         press(&mut c, "7");
+        assert!(!c.has_paste_error());
         assert_eq!(c.value1(), "37");
         // Without negatives, the minus sign is dropped.
         let mut c = converter(Category::Length, "Meters", "Feet");
@@ -1556,6 +1561,38 @@ mod tests {
         press(&mut c, "100");
         // 100 kcal is 0.95 bananas; the comparison is the last result.
         assert_eq!(shown(&c).last().unwrap(), "0.95 bananas");
+    }
+
+    /// Large whole values show the digits of Windows' `DecimalFormatter` (checked on
+    /// Windows 11), not every digit of the double.
+    #[test]
+    fn large_suggestions_show_seventeen_digits_at_most() {
+        assert_eq!(round_suggestion(365249999999999616.0), "365249999999999620");
+        assert_eq!(round_suggestion(999999999999998976.0), "999999999999999000");
+        assert_eq!(
+            round_suggestion(-999999999999998976.0),
+            "-999999999999999000"
+        );
+        // 17 digits even where 16 would give the same double.
+        assert_eq!(
+            round_suggestion(1152921504606851072.0),
+            "1152921504606851100"
+        );
+        assert_eq!(round_suggestion(72057594037927936.0), "72057594037927936");
+        assert_eq!(round_suggestion(8e24), "8000000000000000000000000");
+
+        let value = |c: &Converter, abbreviation: &str| {
+            c.suggestions()
+                .into_iter()
+                .find(|s| s.abbreviation == abbreviation)
+                .map(|s| s.value)
+        };
+        let mut c = converter(Category::Time, "Years", "Weeks");
+        press(&mut c, "999999999999999");
+        assert_eq!(value(&c, "d").as_deref(), Some("365,249,999,999,999,620"));
+        let mut c = converter(Category::Data, "Yottabytes", "Bytes");
+        press(&mut c, "999999999999999");
+        assert_eq!(value(&c, "ZB").as_deref(), Some("999,999,999,999,999,000"));
     }
 
     #[test]

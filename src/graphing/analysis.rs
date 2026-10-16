@@ -19,7 +19,8 @@ use crate::engine::Angle;
 /// Why there is no analysis (Windows' `AnalysisErrorType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnalysisError {
-    /// Inequalities and functions with free variables (`y = mx + b`).
+    /// Inequalities, functions with free variables (`y = mx + b`) and functions without
+    /// real values (`y = √(−1)`).
     NotSupported,
     /// Equations that aren't y = f(x).
     VariableIsNotX,
@@ -162,12 +163,20 @@ pub fn analyze(equation: &Equation, angle: Angle) -> Result<Features, AnalysisEr
     }
     let env = Env { angle, vars: &[] };
     let fun = Fun::new(e, env);
+    // A function without real values (√(−1), √(−1 − x²)) has no features to show. When
+    // Windows' analysis fails, it shows `AnalysisCouldNotBePerformed`'s message, which isn't
+    // among the strings here; "not supported" is the closest.
     if !e.has_x() {
-        return Ok(constant(fun.f(0.0)));
+        let c = fun.f(0.0);
+        return if c.is_finite() {
+            Ok(constant(c))
+        } else {
+            Err(AnalysisError::NotSupported)
+        };
     }
     let mut features = match period(e, angle).and_then(|p| fun.verified_period(p)) {
         Some(p) => periodic(&fun, p),
-        None => aperiodic(&fun),
+        None => aperiodic(&fun).ok_or(AnalysisError::NotSupported)?,
     };
     features.parity = parity(&fun);
     if features.domain.is_none() {
@@ -176,17 +185,15 @@ pub fn analyze(equation: &Equation, angle: Angle) -> Result<Features, AnalysisEr
     Ok(features)
 }
 
-/// The features of a constant function.
+/// The features of a constant function with a real value `c`.
 fn constant(c: f64) -> Features {
     let mut features = Features::empty();
     features.domain = Some("{x ∈ ℝ}".to_string());
-    if c.is_finite() {
-        let value = exact::format(c);
-        features.range = Some(format!("{{y = {value}}}"));
-        features.y_intercept = Some(value);
-        if c == 0.0 {
-            features.too_complex.push(Feature::XIntercept);
-        }
+    let value = exact::format(c);
+    features.range = Some(format!("{{y = {value}}}"));
+    features.y_intercept = Some(value);
+    if c == 0.0 {
+        features.too_complex.push(Feature::XIntercept);
     }
     features.parity = Parity::Even;
     features
@@ -325,15 +332,15 @@ fn linear_slope(arg: &Expr) -> Option<f64> {
 
 /// The least common multiple of two periods whose ratio is a simple fraction.
 fn lcm(p: f64, q: f64) -> Option<f64> {
+    // The larger over the smaller, so that the order doesn't matter: 13 is 13/1, but
+    // its inverse 1/13 has a denominator beyond the 12 tried.
+    let (p, q) = (p.min(q), p.max(q));
     let ratio = q / p;
     (1..=12).find_map(|d| {
         let n = (ratio * d as f64).round();
-        ((ratio * d as f64 - n).abs() < 1e-9 && n >= 1.0).then(|| p * n / gcd(n as i64, d) as f64)
+        ((ratio * d as f64 - n).abs() < 1e-9 && n >= 1.0)
+            .then(|| p * n / exact::gcd(n as i64, d) as f64)
     })
-}
-
-fn gcd(a: i64, b: i64) -> i64 {
-    if b == 0 { a.abs() } else { gcd(b, a % b) }
 }
 
 // ------------------------------------------------------------------ roots
@@ -534,13 +541,14 @@ struct Interval {
     hi_closed: bool,
 }
 
-/// The points where `fun` may start, stop or be punched out, snapped to exact values.
+/// The points where `fun` may start, stop or be punched out.
 fn domain_candidates(fun: &Fun, xs: &[f64]) -> Vec<f64> {
     let mut functions = Vec::new();
     boundary_functions(fun.e, &mut functions);
     let mut candidates = Vec::new();
-    for g in &functions {
-        if !g.has_x() {
+    for (i, g) in functions.iter().enumerate() {
+        // A polynomial lists x once for each power.
+        if !g.has_x() || functions[..i].contains(g) {
             continue;
         }
         let dg = g.derivative(fun.env.angle);
@@ -549,12 +557,13 @@ fn domain_candidates(fun: &Fun, xs: &[f64]) -> Vec<f64> {
         let dgf: &dyn Fn(f64) -> f64 = &dgf;
         candidates.extend(zeros(&gf, dg.as_ref().map(|_| dgf), xs));
     }
-    dedupe(
-        candidates
-            .into_iter()
-            .map(|c| exact::snap(c, TIGHT))
-            .collect(),
-    )
+    dedupe(candidates)
+}
+
+/// Points snapped to the exact values they are near, without repeats. `recognize` is
+/// slow: count the points first (tan(x²) has thousands of poles).
+fn snapped(points: Vec<f64>) -> Vec<f64> {
+    dedupe(points.into_iter().map(|c| exact::snap(c, TIGHT)).collect())
 }
 
 /// The domain of an aperiodic function, as intervals, or `None` if it has too many
@@ -564,6 +573,7 @@ fn domain(fun: &Fun, xs: &[f64]) -> Option<Vec<Interval>> {
     if points.len() > 40 {
         return None;
     }
+    let points = snapped(points);
     let defined_between = |a: f64, b: f64| {
         let probes: Vec<f64> = match (a.is_finite(), b.is_finite()) {
             (true, true) => vec![a + (b - a) * 0.25, (a + b) / 2.0, a + (b - a) * 0.75],
@@ -611,6 +621,10 @@ fn bound(v: f64) -> String {
 }
 
 fn interval_text(i: &Interval) -> String {
+    if i.lo == i.hi {
+        // A single value, which only a range has (x/|x| is −1, then 1).
+        return format!("{{{}}}", bound(i.lo));
+    }
     format!(
         "{}{}, {}{}",
         if i.lo_closed { '[' } else { '(' },
@@ -650,6 +664,13 @@ fn set_text(v: char, intervals: &[Interval]) -> String {
         } else {
             let parts: Vec<String> = points.iter().map(|p| exact::format(*p)).collect();
             format!("{v} ∈ ℝ∖{{{}}}", parts.join(", "))
+        }
+    } else if !intervals.is_empty() && intervals.iter().all(|i| i.lo == i.hi) {
+        // Single values: `y = 1` like a constant's, or `y ∈ {−1, 1}`.
+        let values: Vec<String> = intervals.iter().map(|i| exact::format(i.lo)).collect();
+        match values.as_slice() {
+            [value] => format!("{v} = {value}"),
+            _ => format!("{v} ∈ {{{}}}", values.join(", ")),
         }
     } else if let [only] = intervals
         && v == 'x'
@@ -762,9 +783,11 @@ fn union(mut pieces: Vec<Interval>) -> Vec<Interval> {
         if let Some(last) = out.last_mut() {
             let touches = p.lo < last.hi || (p.lo == last.hi && (last.hi_closed || p.lo_closed));
             if touches {
-                if p.hi > last.hi || (p.hi == last.hi && p.hi_closed) {
+                if p.hi > last.hi {
                     last.hi = p.hi;
-                    last.hi_closed = p.hi_closed || (p.hi == last.hi && last.hi_closed);
+                    last.hi_closed = p.hi_closed;
+                } else if p.hi == last.hi {
+                    last.hi_closed |= p.hi_closed;
                 }
                 continue;
             }
@@ -793,13 +816,18 @@ const SMOOTH_FEATURES: [Feature; 6] = [
     Feature::Monotonicity,
 ];
 
-fn aperiodic(fun: &Fun) -> Features {
+/// The features of a function that isn't periodic, or `None` if it is defined on no
+/// interval (`√(−1 − x²)` nowhere, `√(−x²)` only at 0).
+fn aperiodic(fun: &Fun) -> Option<Features> {
     let mut features = Features::empty();
     let xs = grid();
     let Some(intervals) = domain(fun, &xs) else {
         features.too_complex.extend(SMOOTH_FEATURES);
-        return features;
+        return Some(features);
     };
+    if intervals.is_empty() {
+        return None;
+    }
     features.domain = Some(set_text('x', &intervals));
     if intervals.iter().any(|i| contains(i, 0.0)) && fun.defined(0.0) {
         features.y_intercept = Some(exact::format(fun.f(0.0)));
@@ -811,7 +839,7 @@ fn aperiodic(fun: &Fun) -> Features {
             Feature::HorizontalAsymptotes,
             Feature::ObliqueAsymptotes,
         ]);
-        return features;
+        return Some(features);
     }
     asymptotes(fun, &intervals, &mut features);
 
@@ -895,7 +923,8 @@ fn aperiodic(fun: &Fun) -> Features {
         .map(|c| c.0)
         .filter(|&c| inside(c) && fun.defined(c))
         .collect();
-    if bends.len() > 20 {
+    // Without f″ (too large to use), the bends can't be told.
+    if bends.len() > 20 || fun.d2.is_none() {
         features.too_complex.push(Feature::InflectionPoints);
     } else {
         features.inflection_points = bends
@@ -908,7 +937,7 @@ fn aperiodic(fun: &Fun) -> Features {
     }
 
     if too_many_turns {
-        return features;
+        return Some(features);
     }
 
     // The range: on each piece of the domain, from its lowest to its highest value
@@ -953,7 +982,8 @@ fn aperiodic(fun: &Fun) -> Features {
             .iter()
             .map(|e| e.value)
             .fold(f64::NEG_INFINITY, f64::max);
-        let attained = |v: f64| ends.iter().any(|e| e.value == v && e.attained);
+        // Constant on the piece (x/x): the value is taken inside it.
+        let attained = |v: f64| lo == hi || ends.iter().any(|e| e.value == v && e.attained);
         pieces.push(Interval {
             lo,
             hi,
@@ -979,7 +1009,7 @@ fn aperiodic(fun: &Fun) -> Features {
             features.monotonicity.push((text, direction));
         }
     }
-    features
+    Some(features)
 }
 
 fn contains(i: &Interval, x: f64) -> bool {
@@ -1166,7 +1196,7 @@ fn periodic(fun: &Fun, p: f64) -> Features {
     let d2 = |x: f64| fun.d2(x);
 
     // The domain: ℝ but for poles (tan's π/2 + πn). Gaps can't be written here.
-    let candidates = in_period(domain_candidates(fun, &xs), p);
+    let candidates = in_period(snapped(domain_candidates(fun, &xs)), p);
     let excluded: Vec<f64> = candidates
         .iter()
         .copied()
@@ -1281,7 +1311,9 @@ fn periodic(fun: &Fun, p: f64) -> Features {
     .into_iter()
     .filter(|&x| defined(x))
     .collect();
-    if !bends.is_empty() {
+    if fun.d2.is_none() {
+        features.too_complex.push(Feature::InflectionPoints);
+    } else if !bends.is_empty() {
         let values: Vec<f64> = bends
             .iter()
             .map(|&x| exact::snap(fun.f(x), TIGHT))
@@ -1679,6 +1711,59 @@ mod tests {
     }
 
     #[test]
+    fn ranges() {
+        // [0, max] on [−1, 0] and [0, ∞) on [1, ∞): the union is open at ∞.
+        let f = analyze_text("y=sqrt(x^3-x)");
+        assert_eq!(f.domain.as_deref(), Some("{x ∈ [−1, 0] ∪ [1, ∞)}"));
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [0, ∞)}"));
+        // Constant on each piece of the domain.
+        let f = analyze_text("y=x/x");
+        assert_eq!(f.domain.as_deref(), Some("{x ≠ 0}"));
+        assert_eq!(f.range.as_deref(), Some("{y = 1}"));
+        let f = analyze_text("y=x/|x|");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ {−1, 1}}"));
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, 0)", Direction::Constant),
+                ("(0, ∞)", Direction::Constant)
+            ]
+        );
+    }
+
+    #[test]
+    fn no_real_values() {
+        let error = |text| {
+            let equation = Equation::parse(text, Syntax::default()).unwrap();
+            analyze(&equation, Angle::Radians).unwrap_err()
+        };
+        assert_eq!(error("y=sqrt(-1-x^2)"), AnalysisError::NotSupported);
+        assert_eq!(error("y=ln(-x^2-1)"), AnalysisError::NotSupported);
+        assert_eq!(error("y=sqrt(-1)"), AnalysisError::NotSupported);
+        assert_eq!(error("y=ln(0)"), AnalysisError::NotSupported);
+    }
+
+    #[test]
+    fn many_domain_candidates_are_too_complex() {
+        // Thousands of poles: counted before any exact value is looked for, which took
+        // seconds.
+        for text in ["y=tan(x^2)", "y=1/sin(x^2)"] {
+            let f = analyze_text(text);
+            assert_eq!(f.domain, None);
+            assert!(f.too_complex.contains(&Feature::Domain));
+        }
+    }
+
+    #[test]
+    fn large_derivatives_are_too_complex() {
+        // f″ of x·x·…·x is too large to use: no inflection points can be told.
+        let product = format!("y={}x", "x·".repeat(25));
+        let f = analyze_text(&product);
+        assert!(f.too_complex.contains(&Feature::InflectionPoints), "{f:?}");
+        assert!(f.inflection_points.is_empty());
+    }
+
+    #[test]
     fn degrees() {
         let equation = Equation::parse("y=sin(x)", Syntax::default()).unwrap();
         let f = analyze(&equation, Angle::Degrees).unwrap();
@@ -1702,5 +1787,8 @@ mod tests {
         assert_eq!(p("x sin(x)"), None);
         assert_eq!(p("sin(x^2)"), None);
         assert!((p("sin(sin(x))").unwrap() - 2.0 * pi).abs() < 1e-12);
+        // In either order.
+        assert!((p("sin(13x)+sin(x)").unwrap() - 2.0 * pi).abs() < 1e-12);
+        assert!((p("sin(x)+sin(13x)").unwrap() - 2.0 * pi).abs() < 1e-12);
     }
 }

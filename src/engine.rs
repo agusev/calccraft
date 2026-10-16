@@ -293,8 +293,7 @@ impl Func {
         let ten = || Number::from_integer(10.into());
         let two = || Number::from_integer(2.into());
         let result = match self {
-            Func::Reciprocal if v.is_zero() => return Err(CalcError::DivideByZero),
-            Func::Reciprocal => v.recip(),
+            Func::Reciprocal => math::invert(v)?,
             Func::Square => v * v,
             Func::SquareRoot => return sqrt(v),
             Func::Negate => -v,
@@ -1950,7 +1949,14 @@ impl Calculator {
             self.display_error(CalcError::InvalidInput);
             return false;
         }
-        self.execute(Command::ClearEntry);
+        // `OnPaste` sends CE straight to the engine, so F-E stays on (only the view
+        // model's C and CE buttons turn it off), and in the error state the engine takes
+        // CE as C.
+        self.process(if self.error.is_some() {
+            Command::Clear
+        } else {
+            Command::ClearEntry
+        });
 
         // A `-` at the start or after an operator is a sign. Windows presses ±
         // after the first digit that isn't 0, and remembers a sign before `(`
@@ -1967,7 +1973,10 @@ impl Calculator {
         let mut chars = text.chars().peekable();
         while let Some(c) = chars.next() {
             let (command, mut can_negate) = match c {
-                '0'..='9' => (Command::Digit(c as u8 - b'0'), true),
+                // A 0 never takes the sign (`MapCharacterToButtonId`), or each 0 of `-0.05`
+                // would flip it.
+                '0' => (Command::Digit(0), false),
+                '1'..='9' => (Command::Digit(c as u8 - b'0'), true),
                 'a'..='f' | 'A'..='F' if integer => {
                     let digit = c.to_digit(16).unwrap_or_default() as u8;
                     (Command::Digit(digit), false)
@@ -2017,10 +2026,10 @@ impl Calculator {
                 _ => {}
             }
             if send {
-                self.execute(command);
+                self.paste_key(command);
                 if negate {
                     if can_negate {
-                        self.execute(Command::Function(Func::Negate));
+                        self.paste_key(Command::Function(Func::Negate));
                     }
                     if !matches!(command, Command::Digit(0) | Command::Decimal) {
                         negate = false;
@@ -2031,7 +2040,7 @@ impl Calculator {
             if command == Command::Exponent {
                 match chars.peek() {
                     Some('-') => {
-                        self.execute(Command::Function(Func::Negate));
+                        self.paste_key(Command::Function(Func::Negate));
                         chars.next();
                     }
                     Some('+') => {
@@ -2042,6 +2051,15 @@ impl Calculator {
             }
         }
         true
+    }
+
+    /// One pasted key. `OnPaste` sends it straight to the engine, without the view
+    /// model's error recovery, and in the error state the engine ignores every key but C
+    /// and CE (`HandleErrorCommand`): `1/0*2=` stays `Cannot divide by zero`.
+    fn paste_key(&mut self, command: Command) {
+        if self.error.is_none() {
+            self.execute(command);
+        }
     }
 }
 
@@ -2332,12 +2350,6 @@ fn scaled_round(a: &BigInt, q: &BigInt, k: i64) -> BigInt {
 
 // ------------------------------------------------------------- formatting
 
-/// A number as the Standard mode's display writes it, with thousands separators.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn format_number(v: &Number) -> String {
-    format_with(v, true, MAX_DIGITS, false)
-}
-
 /// Formats a number like Windows' `NumberToString`: up to `precision` significant
 /// digits, with scientific notation for large numbers and for small ones that don't fit
 /// into `precision` decimal places, or always (`scientific`, the Scientific mode's
@@ -2475,6 +2487,11 @@ mod tests {
         let mut calc = Calculator::with_precedence();
         press(&mut calc, keys);
         (calc.display(), calc.expression())
+    }
+
+    /// A number as the Standard mode's display writes it, with thousands separators.
+    fn format_number(v: &Number) -> String {
+        format_with(v, true, MAX_DIGITS, false)
     }
 
     fn history(calc: &Calculator) -> Vec<(String, String)> {
@@ -2835,6 +2852,10 @@ mod tests {
         assert_eq!(calc.display(), "12");
         assert!(calc.paste("-0.5"));
         assert_eq!(calc.display(), "-0.5");
+        // A pasted 0 never takes the sign (`MapCharacterToButtonId`), so the zeros after
+        // the point don't flip it back and forth.
+        assert!(calc.paste("-0.05"));
+        assert_eq!(calc.display(), "-0.05");
     }
 
     #[test]
@@ -2849,6 +2870,11 @@ mod tests {
         assert_eq!(
             (calc.display(), calc.expression()),
             ("-6".into(), "2 × -3 =".into())
+        );
+        assert!(calc.paste("2*-0.05="));
+        assert_eq!(
+            (calc.display(), calc.expression()),
+            ("-0.1".into(), "2 × -0.05 =".into())
         );
         // Without `=` the expression waits, like typing it.
         assert!(calc.paste("8/2"));
@@ -2885,6 +2911,48 @@ mod tests {
         calc.paste("abc");
         press(&mut calc, "4");
         assert_eq!(calc.display(), "4");
+    }
+
+    #[test]
+    fn paste_ignores_keys_after_an_error() {
+        // `OnPaste` sends the keys straight to the engine, without the view model's error
+        // recovery, and the engine ignores all but C and CE in the error state.
+        let mut calc = Calculator::default();
+        assert!(calc.paste("1/0*2="));
+        assert_eq!(
+            (calc.display(), calc.expression()),
+            ("Cannot divide by zero".into(), "1 ÷ 0 ×".into())
+        );
+        assert!(calc.history().is_empty());
+        assert!(calc.paste("99e9999+1="));
+        assert_eq!(
+            (calc.display(), calc.expression()),
+            ("Overflow".into(), "9.9e+10000 +".into())
+        );
+        assert!(calc.history().is_empty());
+        // The next paste starts with CE, which is C in the error state.
+        assert!(calc.paste("2+3="));
+        assert_eq!(calc.display(), "5");
+        let mut scientific = Calculator::with_precedence();
+        assert!(scientific.paste("(1/0)*2="));
+        assert_eq!(scientific.display(), "Cannot divide by zero");
+        assert!(scientific.history().is_empty());
+    }
+
+    #[test]
+    fn paste_keeps_scientific_notation_on() {
+        // `OnPaste` sends CE straight to the engine; only the view model's C and CE
+        // buttons turn F-E off.
+        let mut calc = Calculator::with_precedence();
+        calc.execute(Command::ToggleNotation);
+        assert!(calc.paste("12+5="));
+        assert!(calc.notation());
+        assert_eq!(calc.display(), "1.7e+1");
+        // In the error state, too.
+        assert!(calc.paste("1/0="));
+        assert!(calc.paste("3="));
+        assert!(calc.notation());
+        assert_eq!(calc.display(), "3.e+0");
     }
 
     #[test]
@@ -3243,6 +3311,19 @@ mod tests {
         assert!(scientific.paste("-2e-1*5="));
         assert_eq!(scientific.display(), "-1");
         assert_eq!(operand_length("1.5e-12"), 2);
+    }
+
+    #[test]
+    fn scientific_power_of_a_number_close_to_one() {
+        // Windows' `exprat` checks y·ln x itself: so close to 1 an estimate of ln x is 0,
+        // but the product is beyond ±100000 (here 10^23, whose e^x never ended).
+        assert_eq!(
+            run_scientific("1.00000000000000001 ^ ( 1 exp 40 + .5 ) =").0,
+            "Invalid input"
+        );
+        let mut calc = Calculator::with_precedence();
+        assert!(calc.paste("1.00000000000000001^(1e40+.5)="));
+        assert_eq!(calc.display(), "Invalid input");
     }
 
     // ------------------------------------------------------------ programmer

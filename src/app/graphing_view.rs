@@ -18,12 +18,14 @@ use eframe::egui::{
 };
 
 use super::date_view::popup_frame;
+use super::icons::{
+    ICON_BACK, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP, ICON_COPY, ICON_CUT, ICON_DELETE, ICON_HIDE,
+    ICON_LIGHTNING, ICON_MULTIPLY, ICON_PASTE, ICON_REMOVE, ICON_THEME, ICON_UNDO, ICON_VIEW,
+    ICON_WARNING, icon_label,
+};
 use super::palette::{DARK_GRAPH, GraphPalette, LIGHT_GRAPH};
 use super::strings::{tr, tr_format};
-use super::{
-    CalculatorApp, HEADER_HEIGHT, ICON_BACK, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP, ICON_DELETE,
-    ICON_MULTIPLY, ICON_THEME, Kind, RADIUS, access, numbers, radio_button, semibold,
-};
+use super::{CalculatorApp, HEADER_HEIGHT, Kind, RADIUS, access, numbers, radio_button, semibold};
 use crate::engine::Angle;
 use crate::graphing::analysis::{self, AnalysisError, Features, Period};
 use crate::graphing::plot::{LineStyle, View};
@@ -36,21 +38,13 @@ const PANEL_MIN: f32 = 300.0;
 const PANEL_MAX: f32 = 420.0;
 /// At most 14 equations (`maxEquationSize`).
 const MAX_EQUATIONS: usize = 14;
+/// The characters an equation box takes (`MathRichEditBox`'s `MaxLength`).
+const MAX_EQUATION_LENGTH: usize = 2048;
 /// The order in which new equations take the 14 colors (`colorAssignmentMapping`).
 const COLOR_ORDER: [usize; 14] = [0, 3, 7, 10, 1, 4, 8, 11, 2, 5, 9, 12, 6, 13];
 /// An equation box's height (`MinHeight="44"`), and its buttons' width.
 const ROW_HEIGHT: f32 = 44.0;
 const ROW_BUTTON: f32 = 38.0;
-/// Segoe Fluent Icons used here only.
-const ICON_LIGHTNING: char = '\u{E945}';
-const ICON_VIEW: char = '\u{E890}';
-const ICON_HIDE: char = '\u{ED1A}';
-const ICON_WARNING: char = '\u{E7BA}';
-const ICON_REMOVE: char = '\u{ECC9}';
-const ICON_CUT: char = '\u{E8C6}';
-const ICON_PASTE: char = '\u{E77F}';
-const ICON_UNDO: char = '\u{E7A7}';
-pub(super) const ICON_COPY: char = super::ICON_COPY;
 
 /// The stored "Graph theme" choice (`IsGraphThemeMatchApp`, Windows' own setting name).
 pub(super) const THEME_KEY: &str = "IsGraphThemeMatchApp";
@@ -141,6 +135,7 @@ impl Variable {
             self.max = min + 10.0;
         }
         self.min = min;
+        self.keep_value_in_range();
     }
 
     pub(super) fn set_max(&mut self, max: f64) {
@@ -148,10 +143,18 @@ impl Variable {
             self.min = max - 10.0;
         }
         self.max = max;
+        self.keep_value_in_range();
+    }
+
+    /// Windows' slider pulls its value into a new range, and its two-way binding hands
+    /// that value back to the variable (`Value="{x:Bind Value, Mode=TwoWay}"`).
+    fn keep_value_in_range(&mut self) {
+        self.value = self.value.max(self.min).min(self.max);
     }
 }
 
-/// `v` with 6 significant digits, like .NET's "G6" (and C++'s `%g`).
+/// `v` with 6 significant digits, like .NET's "G6": fixed point when the exponent is
+/// from −5 (excluded) to 6 (excluded), scientific notation otherwise.
 pub(super) fn g6(v: f64) -> String {
     if v == 0.0 || !v.is_finite() {
         return if v.is_finite() {
@@ -160,20 +163,47 @@ pub(super) fn g6(v: f64) -> String {
             v.to_string()
         };
     }
-    let exponent = v.abs().log10().floor() as i32;
-    if !(-5..6).contains(&exponent) {
-        let mantissa = v / 10f64.powi(exponent);
-        let mut m = format!("{mantissa:.5}");
+    // The exponent is the rounded number's: rounding can carry into the next power of
+    // ten (999999.7 is 1E+06).
+    let scientific = format!("{:.5e}", v.abs());
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let digits = mantissa.replace('.', "");
+    let sign = if v < 0.0 { "-" } else { "" };
+    if !(-4..6).contains(&exponent) {
+        let mut m = format!("{}.{}", &digits[..1], &digits[1..]);
         trim_zeros(&mut m);
         return format!(
-            "{m}E{}{:02}",
+            "{sign}{m}E{}{:02}",
             if exponent < 0 { '-' } else { '+' },
             exponent.abs()
         );
     }
-    let mut s = format!("{:.*}", (5 - exponent).max(0) as usize, v);
+    let mut s = if exponent >= 0 {
+        let (int, fraction) = digits.split_at(exponent as usize + 1);
+        format!("{int}.{fraction}")
+    } else {
+        format!("0.{}{digits}", "0".repeat((-exponent - 1) as usize))
+    };
     trim_zeros(&mut s);
-    s
+    format!("{sign}{s}")
+}
+
+/// The value at `t` (0 to 1) along a slider from `min` to `max`, snapped to the steps
+/// from the minimum (`StepFrequency`). Blending the ends, unlike min + t × (max − min),
+/// stays finite on a slider from −1e308 to 1e308.
+fn slider_value(t: f64, min: f64, max: f64, step: f64) -> f64 {
+    let raw = min * (1.0 - t) + max * t;
+    let snapped = clean(min + ((raw - min) / step).round() * step);
+    let value = if snapped.is_finite() { snapped } else { raw };
+    value.max(min).min(max)
+}
+
+/// Where `value` is along a slider from `min` to `max`, from 0 to 1. The halves keep
+/// the span finite on a slider from −1e308 to 1e308.
+fn slider_fraction(value: f64, min: f64, max: f64) -> f64 {
+    let t = (value / 2.0 - min / 2.0) / (max / 2.0 - min / 2.0);
+    if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) }
 }
 
 /// `v` without the floating point noise steps add up to (0.30000000000000004).
@@ -405,6 +435,7 @@ impl GraphingState {
                 (!row.submitted.trim().is_empty()).then(|| Equation::parse(&row.submitted, syntax));
         }
         self.equations_changed();
+        self.refresh_analysis();
     }
 
     /// After a change to what is graphed: the variables follow, and a view that wasn't
@@ -417,7 +448,26 @@ impl GraphingState {
         if !self.manual {
             self.fitted = None;
         }
+        // The plots are cached by the submitted text, which `reparse` keeps.
+        self.cache = None;
         self.update_variables();
+    }
+
+    /// Analyzes the analyzed equation again (it was parsed again, or the unit changed).
+    /// An equation that no longer parses closes the analysis.
+    fn refresh_analysis(&mut self) {
+        let Some(open) = &mut self.analysis else {
+            return;
+        };
+        match self
+            .rows
+            .iter()
+            .find(|r| r.id == open.row)
+            .and_then(|r| r.equation.as_ref())
+        {
+            Some(Ok(e)) => open.result = analysis::analyze(e, self.angle),
+            _ => self.analysis = None,
+        }
     }
 
     /// The free variables of the graphed equations, keeping the sliders of the ones that
@@ -464,8 +514,12 @@ impl GraphingState {
 
 /// The syntax of the user's region: a decimal comma takes `;` between arguments.
 pub(super) fn region_syntax() -> Syntax {
-    let decimal = numbers().localize("0.5").chars().nth(1).unwrap_or('.');
-    Syntax::for_decimal(decimal)
+    Syntax::for_decimal(region_decimal())
+}
+
+/// The region's decimal separator.
+fn region_decimal() -> char {
+    numbers().localize("0.5").chars().nth(1).unwrap_or('.')
 }
 
 /// Replaces `range` of `text` with `insert`, then selects `select` characters from
@@ -548,18 +602,7 @@ pub(super) fn math_job(text: &str, size: f32, color: Color32) -> LayoutJob {
         }
         let start = j;
         if j < n && chars[j] == '(' {
-            let mut depth = 0;
-            while j < n {
-                match chars[j] {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-                j += 1;
-                if depth == 0 {
-                    break;
-                }
-            }
+            j = group_end(&chars, j);
         } else if j < n && (chars[j].is_ascii_digit() || chars[j] == '.' || chars[j] == ',') {
             while j < n && (chars[j].is_ascii_digit() || chars[j] == '.' || chars[j] == ',') {
                 j += 1;
@@ -573,18 +616,7 @@ pub(super) fn math_job(text: &str, size: f32, color: Color32) -> LayoutJob {
             let (len, name) = parse::word_parts(&word)[0];
             j += len;
             if name && j < n && chars[j] == '(' {
-                let mut depth = 0;
-                while j < n {
-                    match chars[j] {
-                        '(' => depth += 1,
-                        ')' => depth -= 1,
-                        _ => {}
-                    }
-                    j += 1;
-                    if depth == 0 {
-                        break;
-                    }
-                }
+                j = group_end(&chars, j);
             }
         } else if j < n {
             j += 1;
@@ -642,6 +674,25 @@ pub(super) fn math_job(text: &str, size: f32, color: Color32) -> LayoutJob {
     job
 }
 
+/// Where the parenthesized group that opens at `start` ends: after its closing
+/// parenthesis, or at the end of the text while it isn't closed.
+fn group_end(chars: &[char], start: usize) -> usize {
+    let mut depth = 0;
+    let mut j = start;
+    while j < chars.len() {
+        match chars[j] {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        j += 1;
+        if depth == 0 {
+            break;
+        }
+    }
+    j
+}
+
 /// A color's text: black or white, whichever stands out (`Utilities.GetContrastColor`).
 fn contrast(color: Color32) -> Color32 {
     let [r, g, b, _] = color.to_array();
@@ -687,7 +738,7 @@ impl CalculatorApp {
 
     /// The Graphing mode's keys besides what the text boxes take: Ctrl+plus and
     /// Ctrl+minus zoom (`ZoomInButton`'s and `ZoomOutButton`'s accelerators), Ctrl+0 the
-    /// graph view button, and Esc closes a popup or stops tracing.
+    /// graph view button, and Esc closes the menu or a popup, or stops tracing.
     pub(super) fn handle_graphing_keyboard(&mut self, ctx: &Context) {
         let pressed = |key: Key| {
             ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, key))
@@ -703,13 +754,24 @@ impl CalculatorApp {
         if pressed(Key::Num0) {
             self.toggle_graph_view();
         }
+        // One Esc closes one thing, the topmost: the menu, a popup, active tracing, then
+        // the function analysis (in `draw_analysis`). A used Esc is consumed, so it
+        // doesn't close the next one too.
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.graphing.close_popup() {
-                return;
-            }
-            if self.graphing.tracing {
+            let handled = if self.flyout != super::Flyout::None {
+                self.flyout = super::Flyout::None;
+                true
+            } else if self.graphing.close_popup() {
+                true
+            } else if self.graphing.tracing {
                 self.graphing.tracing = false;
                 ctx.memory_mut(|m| m.request_focus(super::graph_canvas::TRACE_ID.into()));
+                true
+            } else {
+                false
+            };
+            if handled {
+                ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
             }
         }
     }
@@ -1004,7 +1066,7 @@ impl CalculatorApp {
             };
             painter.rect_filled(button, RADIUS, overlay.gamma_multiply(opacity));
             let glyph = if visible { ICON_HIDE } else { ICON_VIEW };
-            let icon = painter.layout_job(self.icon(glyph, if visible { "–" } else { "◉" }, 16.0));
+            let icon = painter.layout_job(icon_label(glyph, 16.0));
             painter.galley(button.center() - icon.size() / 2.0, icon, text_color);
             let tip = if visible {
                 tr("hideEquationButtonToolTip")
@@ -1035,7 +1097,7 @@ impl CalculatorApp {
         let mut actions = RowActions::default();
         if focused && !empty {
             let r = slot(ROW_BUTTON);
-            let label = self.icon(ICON_MULTIPLY, "×", 12.0);
+            let label = icon_label(ICON_MULTIPLY, 12.0);
             if self.button(
                 ui,
                 r,
@@ -1050,7 +1112,7 @@ impl CalculatorApp {
         } else if hovered && !focused {
             if !last {
                 let r = slot(ROW_BUTTON);
-                let label = self.icon(ICON_DELETE, "✕", 14.0);
+                let label = icon_label(ICON_DELETE, 14.0);
                 let name = tr("removeButton.AutomationName");
                 let response_rect = r;
                 if self.button(
@@ -1073,7 +1135,7 @@ impl CalculatorApp {
             }
             if error.is_none() && !add_mode {
                 let r = slot(ROW_BUTTON);
-                let label = self.icon(ICON_THEME, "◐", 14.0);
+                let label = icon_label(ICON_THEME, 14.0);
                 let name = tr("colorChooserButton.AutomationName");
                 if self.button(
                     ui,
@@ -1093,7 +1155,7 @@ impl CalculatorApp {
                     tr("colorChooserButton.ToolTip"),
                 );
                 let r = slot(ROW_BUTTON);
-                let label = self.icon(ICON_LIGHTNING, "ƒ", 14.0);
+                let label = icon_label(ICON_LIGHTNING, 14.0);
                 let name = tr("functionAnalysisButton.AutomationName");
                 let enabled = !self.graphing.rows[index].submitted.is_empty();
                 if self.button(
@@ -1119,7 +1181,7 @@ impl CalculatorApp {
             && !focused
         {
             let r = slot(32.0);
-            let icon = painter.layout_job(self.icon(ICON_WARNING, "⚠", 16.0));
+            let icon = painter.layout_job(icon_label(ICON_WARNING, 16.0));
             painter.galley(r.center() - icon.size() / 2.0, icon, p.critical);
             let message = tr(error.key());
             let response = ui.interact(r, Id::new("graph-eq-error").with(id), Sense::hover());
@@ -1151,7 +1213,7 @@ impl CalculatorApp {
             .desired_width(text_rect.width())
             .vertical_align(Align::Center)
             .min_size(vec2(text_rect.width(), text_rect.height()))
-            .char_limit(2048)
+            .char_limit(MAX_EQUATION_LENGTH)
             .layouter(&mut layouter)
             .show(&mut child);
         normalize(&mut row.text);
@@ -1386,7 +1448,7 @@ impl CalculatorApp {
         } else {
             ICON_CHEVRON_DOWN
         };
-        let label = self.icon(glyph, if open { "˄" } else { "˅" }, 9.0);
+        let label = icon_label(glyph, 9.0);
         let name_text = tr("VariableAreaSettings.AutomationName");
         let toggled = self.button(
             ui,
@@ -1524,14 +1586,11 @@ impl CalculatorApp {
             pos2(rect.right() - 10.0, rect.center().y + 2.0),
         );
         let v = &mut self.graphing.variables[k];
-        let span = (v.max - v.min).max(1e-12);
         if let Some(pos) = response.interact_pointer_pos()
             && (response.dragged() || response.clicked() || response.is_pointer_button_down_on())
         {
-            // The thumb snaps to the steps from the minimum (`StepFrequency`).
             let t = ((pos.x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
-            let steps = (t * span / v.step).round();
-            v.value = clean(v.min + steps * v.step).clamp(v.min, v.max);
+            v.value = slider_value(t, v.min, v.max, v.step);
         }
         if response.has_focus() {
             // The arrow keys move the thumb, not the focus.
@@ -1558,7 +1617,7 @@ impl CalculatorApp {
                 v.value = clean(v.value + v.step).min(v.max);
             }
         }
-        let t = ((v.value - v.min) / span).clamp(0.0, 1.0) as f32;
+        let t = slider_fraction(v.value, v.min, v.max) as f32;
         let thumb_x = track.left() + t * track.width();
         let painter = ui.painter();
         painter.rect_filled(track, 2.0, p.slider_rail);
@@ -1630,7 +1689,7 @@ impl CalculatorApp {
             painter.rect_filled(back, RADIUS, overlay.gamma_multiply(opacity));
         }
         let fg = Color32::WHITE;
-        let arrow = painter.layout_job(self.icon(ICON_BACK, "←", 16.0));
+        let arrow = painter.layout_job(icon_label(ICON_BACK, 16.0));
         painter.galley(
             pos2(back.left() + 10.0, back.center().y - arrow.size().y / 2.0),
             arrow,
@@ -1656,7 +1715,10 @@ impl CalculatorApp {
             p.text,
         );
         if response.clicked()
-            || ui.ctx().input(|i| i.key_pressed(Key::Escape)) && self.graphing.popup.is_none()
+            || self.graphing.popup.is_none()
+                && ui
+                    .ctx()
+                    .input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
         {
             let id = self.graphing.rows[index].id;
             self.graphing.analysis = None;
@@ -1903,12 +1965,7 @@ impl CalculatorApp {
             if response.clicked() && !checked {
                 self.graphing.angle = angle;
                 self.graphing.equations_changed();
-                if let Some(a) = &mut self.graphing.analysis
-                    && let Some(i) = self.graphing.rows.iter().position(|r| r.id == a.row)
-                    && let Some(Ok(e)) = &self.graphing.rows[i].equation
-                {
-                    a.result = analysis::analyze(e, angle);
-                }
+                self.graphing.refresh_analysis();
             }
         }
         // Line thickness.
@@ -1951,7 +2008,7 @@ impl CalculatorApp {
             combo.center().y,
             Stroke::new(self.graphing.line_width, p.text),
         );
-        let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", 12.0));
+        let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, 12.0));
         painter.galley(
             pos2(
                 combo.right() - 26.0,
@@ -1997,11 +2054,10 @@ impl CalculatorApp {
         }
         if open_widths {
             // The line thickness list, over the flyout.
-            let list = Rect::from_min_size(
-                combo.left_bottom() + vec2(0.0, 2.0),
-                vec2(combo.width(), 4.0 * 36.0 + 8.0),
-            );
+            let list = drop_down_rect(combo, 4, full);
             popup_frame(p, &painter, list, p.popup);
+            // Its edges don't click the controls under it.
+            ui.interact(list, Id::new("graph-width-list"), Sense::CLICK);
             for (k, width) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
                 let item = Rect::from_min_size(
                     list.min + vec2(4.0, 4.0 + k as f32 * 36.0),
@@ -2072,12 +2128,7 @@ impl CalculatorApp {
         if !focused {
             self.graphing.range_texts[k] = numbers().localize_plain(&g6(value));
         }
-        let text = &self.graphing.range_texts[k];
-        let parsed = numbers()
-            .delocalize(text.trim())
-            .parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite());
+        let parsed = range_value(&self.graphing.range_texts[k], value, focused);
         let painter = ui.painter().clone();
         let error = parsed.is_none();
         let fill = if error {
@@ -2122,7 +2173,7 @@ impl CalculatorApp {
             let next = Id::new("graph-range-box").with((k + 1) % 4);
             ui.ctx().memory_mut(|m| m.request_focus(next));
         }
-        if focused { parsed } else { Some(value) }
+        parsed
     }
 
     /// The line options flyout (`EquationStylePanelControl`): 14 colors and, except for
@@ -2242,7 +2293,7 @@ impl CalculatorApp {
             style,
             line_color,
         );
-        let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", 12.0));
+        let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, 12.0));
         painter.galley(
             pos2(
                 combo.right() - 26.0,
@@ -2256,11 +2307,10 @@ impl CalculatorApp {
             open = !styles_open;
         }
         if open {
-            let list = Rect::from_min_size(
-                combo.left_bottom() + vec2(0.0, 2.0),
-                vec2(combo.width(), 3.0 * 36.0 + 8.0),
-            );
+            let list = drop_down_rect(combo, 3, full);
             popup_frame(p, &painter, list, p.popup);
+            // Its edges don't click the controls under it.
+            ui.interact(list, Id::new("graph-style-list"), Sense::CLICK);
             for (k, s) in [LineStyle::Solid, LineStyle::Dash, LineStyle::Dot]
                 .into_iter()
                 .enumerate()
@@ -2377,7 +2427,15 @@ impl CalculatorApp {
             1 => ctx.copy_text(selection),
             2 => {
                 if let Some(pasted) = clipboard_text() {
-                    let mut pasted: String = pasted.lines().next().unwrap_or("").to_string();
+                    // Only as much as the box takes, as a keyboard paste (`char_limit`).
+                    let kept = len - range.end.min(len).saturating_sub(range.start.min(len));
+                    let mut pasted: String = pasted
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(MAX_EQUATION_LENGTH.saturating_sub(kept))
+                        .collect();
                     normalize(&mut pasted);
                     let n = pasted.chars().count();
                     let (t, r) = insert_text(&text, range.clone(), &pasted, n, 0);
@@ -2567,7 +2625,7 @@ impl CalculatorApp {
             }
             let color = if *enabled { p.text } else { p.text_disabled };
             if let Some(icon) = icon {
-                let galley = painter.layout_job(self.icon(*icon, "", 16.0));
+                let galley = painter.layout_job(icon_label(*icon, 16.0));
                 painter.galley(
                     pos2(item.left() + 12.0, item.center().y - galley.size().y / 2.0),
                     galley,
@@ -2616,6 +2674,32 @@ fn text_ui(ui: &mut Ui, rect: Rect, p: &super::palette::Palette) -> Ui {
     child
 }
 
+/// What a window box holds: the view's `value` until something else is typed in it, or
+/// `None` while the text isn't a number. The box shows the value with 6 digits, so
+/// reading that text back would move the view by a click into the box.
+fn range_value(text: &str, value: f64, focused: bool) -> Option<f64> {
+    if !focused || text.trim() == numbers().localize_plain(&g6(value)) {
+        return Some(value);
+    }
+    numbers()
+        .delocalize(text.trim())
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+/// Where the list of a drop-down with `items` 36 px items opens: under its combo box,
+/// or over it when the window ends first (the line thickness list in a 500 px high
+/// window).
+fn drop_down_rect(combo: Rect, items: usize, full: Rect) -> Rect {
+    let size = vec2(combo.width(), items as f32 * 36.0 + 8.0);
+    let mut top = combo.bottom() + 2.0;
+    if top + size.y > full.bottom() - 4.0 {
+        top = (combo.top() - 2.0 - size.y).max(full.top() + 4.0);
+    }
+    Rect::from_min_size(pos2(combo.left(), top), size)
+}
+
 /// A tooltip for a control drawn by hand.
 fn tooltip(ui: &Ui, rect: Rect, id: Id, text: &str) {
     let response = ui.interact(rect, id.with("tip"), Sense::hover());
@@ -2630,7 +2714,7 @@ fn clipboard_text() -> Option<String> {
 /// An analysis value in the region's format: a decimal comma takes `;` between the
 /// coordinates, as Windows' `DecimalCommaAndListSemicolon`.
 fn localize_math(text: &str) -> String {
-    let decimal = numbers().localize("0.5").chars().nth(1).unwrap_or('.');
+    let decimal = region_decimal();
     if decimal == ',' {
         text.replace(", ", "; ").replace('.', ",")
     } else if decimal != '.' {
@@ -2859,10 +2943,80 @@ mod tests {
         let mut v = Variable::new('a');
         v.set_value(8.0);
         assert_eq!(v.max, 8.0);
+        // A new range pulls the value in, as Windows' slider does.
         v.set_min(9.0);
-        assert_eq!((v.min, v.max), (9.0, 19.0));
+        assert_eq!((v.min, v.max, v.value), (9.0, 19.0, 9.0));
         v.set_max(2.0);
-        assert_eq!((v.min, v.max), (-8.0, 2.0));
+        assert_eq!((v.min, v.max, v.value), (-8.0, 2.0, 2.0));
+        // A value inside the range stays.
+        v.set_value(1.0);
+        v.set_min(-1.0);
+        v.set_max(3.0);
+        assert_eq!(v.value, 1.0);
+    }
+
+    #[test]
+    fn huge_sliders() {
+        // From −1e308 to 1e308 the span overflows; the thumb and the value don't.
+        let (min, max) = (-1e308, 1e308);
+        assert_eq!(slider_fraction(1.0, min, max), 0.5);
+        assert_eq!(slider_fraction(max, min, max), 1.0);
+        for t in [0.0, 0.25, 0.5, 1.0] {
+            let value = slider_value(t, min, max, 0.1);
+            assert!(
+                value.is_finite() && (min..=max).contains(&value),
+                "{t}: {value}"
+            );
+        }
+        // An ordinary slider snaps to its steps.
+        assert_eq!(slider_value(0.5, -5.0, 5.0, 0.1), 0.0);
+        assert_eq!(slider_value(0.62, -5.0, 5.0, 0.1), 1.2);
+        assert_eq!(slider_value(1.0, -5.0, 5.0, 3.0), 4.0);
+        assert_eq!(slider_fraction(1.0, -5.0, 5.0), 0.6);
+    }
+
+    #[test]
+    fn range_boxes() {
+        let shown = |v: f64| numbers().localize_plain(&g6(v));
+        // A click into a box doesn't move the view: its text is the value rounded.
+        let x = -27.220412;
+        assert_eq!(range_value(&shown(x), x, true), Some(x));
+        assert_eq!(range_value(&shown(x), x, false), Some(x));
+        // Something else typed in is read.
+        assert_eq!(range_value(&shown(-20.0), x, true), Some(-20.0));
+        assert_eq!(range_value("", x, true), None);
+        assert_eq!(range_value("", x, false), Some(x));
+    }
+
+    #[test]
+    fn drop_downs_fit_the_window() {
+        let full = Rect::from_min_size(Pos2::ZERO, vec2(320.0, 500.0));
+        // Under the combo box when there's room.
+        let combo = Rect::from_min_size(pos2(20.0, 100.0), vec2(200.0, 32.0));
+        let list = drop_down_rect(combo, 4, full);
+        assert_eq!(list.top(), combo.bottom() + 2.0);
+        // The line thickness list in a 320 × 500 window opens over it.
+        let combo = Rect::from_min_size(pos2(20.0, 363.0), vec2(278.0, 32.0));
+        let list = drop_down_rect(combo, 4, full);
+        assert_eq!(list.bottom(), combo.top() - 2.0);
+        assert!(full.contains_rect(list));
+    }
+
+    #[test]
+    fn reparsing_refreshes_the_analysis() {
+        let mut g = GraphingState::new();
+        g.rows[0].text = "y=x^2".into();
+        g.submit(0, Syntax::default());
+        g.analysis = Some(Analysis {
+            row: g.rows[0].id,
+            result: Err(AnalysisError::NotSupported),
+        });
+        g.reparse(Syntax::for_decimal(','));
+        assert!(g.analysis.as_ref().is_some_and(|a| a.result.is_ok()));
+        // An equation that no longer parses closes it.
+        g.rows[0].submitted = "y=x)".into();
+        g.reparse(Syntax::default());
+        assert!(g.analysis.is_none());
     }
 
     #[test]
@@ -2890,6 +3044,17 @@ mod tests {
         assert_eq!(g6(0.1), "0.1");
         assert_eq!(g6(1234567.0), "1.23457E+06");
         assert_eq!(g6(0.0), "0");
+        // The exponent is the rounded number's.
+        assert_eq!(g6(9999996.0), "1E+07");
+        assert_eq!(g6(999999.7), "1E+06");
+        assert_eq!(g6(999999.0), "999999");
+        assert_eq!(g6(99999.97), "100000");
+        // Fixed point down to an exponent of −4, scientific below.
+        assert_eq!(g6(0.0001), "0.0001");
+        assert_eq!(g6(-0.00012345678), "-0.000123457");
+        assert_eq!(g6(0.000012345), "1.2345E-05");
+        assert_eq!(g6(-1e-300), "-1E-300");
+        assert_eq!(g6(1e308), "1E+308");
     }
 
     #[test]

@@ -248,7 +248,7 @@ impl IntegerMode {
                 // set divide as their two's complement magnitude.
                 let magnitude = |v: &Number| {
                     if self.msb(v) {
-                        (boolean(v, &chop, Bits::Xor) + Number::one(), true)
+                        (-self.signed(v), true)
                     } else {
                         (v.clone(), false)
                     }

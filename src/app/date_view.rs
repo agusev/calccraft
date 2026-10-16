@@ -9,8 +9,9 @@ use eframe::egui::{
     text::LayoutJob, vec2,
 };
 
+use super::icons::{ICON_CALENDAR, ICON_CARET_DOWN, ICON_CARET_UP, ICON_CHEVRON_DOWN, icon_label};
 use super::{
-    CalculatorApp, Flyout, ICON_CALENDAR, ICON_CHEVRON_DOWN, RADIUS, access,
+    CalculatorApp, Flyout, RADIUS, access,
     palette::Palette,
     radio_button,
     region::{self, formats},
@@ -18,10 +19,6 @@ use super::{
     strings::{tr, tr_format},
 };
 use crate::dates::{self, MAX_DATE, MAX_OFFSET, MIN_DATE};
-
-// Glyphs from the Segoe Fluent Icons font.
-const ICON_CARET_UP: char = '\u{EDDB}';
-const ICON_CARET_DOWN: char = '\u{EDDC}';
 
 const PAGE_MARGIN: f32 = 16.0;
 const CONTROL_HEIGHT: f32 = 32.0;
@@ -387,7 +384,7 @@ impl CalculatorApp {
         painter.rect_filled(rect, RADIUS, subtle_fill(p, &response));
         let label_pos = pos2(text_pos.x, rect.center().y - label.size().y / 2.0);
         painter.galley(label_pos, label, p.text);
-        let chevron = self.icon(ICON_CHEVRON_DOWN, "˅", 12.0);
+        let chevron = icon_label(ICON_CHEVRON_DOWN, 12.0);
         paint_centered(
             painter,
             pos2(rect.right() - 20.0, rect.center().y),
@@ -423,7 +420,7 @@ impl CalculatorApp {
             label,
             p.text,
         );
-        let glyph = self.icon(ICON_CALENDAR, "▦", 16.0);
+        let glyph = icon_label(ICON_CALENDAR, 16.0);
         paint_centered(painter, glyph_center, glyph, p.text);
         if response.clicked() {
             self.date.popup = Some(Popup::Calendar {
@@ -465,7 +462,7 @@ impl CalculatorApp {
             FontId::proportional(14.0),
             p.text,
         );
-        let chevron = self.icon(ICON_CHEVRON_DOWN, "˅", 12.0);
+        let chevron = icon_label(ICON_CHEVRON_DOWN, 12.0);
         let chevron_pos = pos2(rect.right() - 18.0, rect.center().y);
         paint_centered(painter, chevron_pos, chevron, p.text_secondary);
         if response.clicked() {
@@ -674,20 +671,18 @@ impl CalculatorApp {
         let arrows = [
             (
                 ICON_CARET_UP,
-                "▲",
                 false,
                 rect.right() - 1.5 * arrow_width,
                 "Previous",
             ),
             (
                 ICON_CARET_DOWN,
-                "▼",
                 true,
                 rect.right() - 0.5 * arrow_width,
                 "Next",
             ),
         ];
-        for (glyph, fallback, forward, x, name) in arrows {
+        for (glyph, forward, x, name) in arrows {
             let target = step_page(view, shown, forward);
             let button =
                 Rect::from_center_size(pos2(x, rect.top() + 24.0), vec2(arrow_width - 4.0, 40.0));
@@ -700,12 +695,7 @@ impl CalculatorApp {
             } else {
                 p.text_disabled
             };
-            paint_centered(
-                &painter,
-                button.center(),
-                self.icon(glyph, fallback, 8.0),
-                color,
-            );
+            paint_centered(&painter, button.center(), icon_label(glyph, 8.0), color);
         }
 
         // The mouse wheel flips pages too, and so do Page Up and Page Down.

@@ -603,6 +603,43 @@ fn nearest_on_segment(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> [f32; 2] {
 /// the same view for x² (x from −27.2 to 27.2 and y from −3.025 to 30.25 in a 1.64:1
 /// graph) and similar ones elsewhere.
 pub fn best_fit(equations: &[(&Equation, Env)], w: f32, h: f32) -> View {
+    // x = g(y) is y = g(x) on its side. Without functions y = f(x) to fit as well, it gets
+    // that one's view on its side: x = y² the room y = x² has under its vertex.
+    let has = |shape: fn(&Shape) -> bool| equations.iter().any(|(e, _)| shape(&e.shape));
+    if has(|s| matches!(s, Shape::Inverse(_))) && !has(|s| matches!(s, Shape::Function(_))) {
+        let mirrored: Vec<Equation> = equations.iter().map(|(e, _)| mirror(e)).collect();
+        let pairs: Vec<(&Equation, Env)> = mirrored
+            .iter()
+            .zip(equations)
+            .map(|(e, (_, env))| (e, *env))
+            .collect();
+        let view = fit(&pairs, h, w);
+        return View {
+            x_min: view.y_min,
+            x_max: view.y_max,
+            y_min: view.x_min,
+            y_max: view.x_max,
+        };
+    }
+    fit(equations, w, h)
+}
+
+/// `equation` with x and y swapped: x = g(y) becomes y = g(x).
+fn mirror(equation: &Equation) -> Equation {
+    let shape = match &equation.shape {
+        Shape::Function(f) => Shape::Inverse(f.swap_xy()),
+        Shape::Inverse(g) => Shape::Function(g.swap_xy()),
+        Shape::Implicit(f) => Shape::Implicit(f.swap_xy()),
+    };
+    Equation {
+        shape,
+        relation: equation.relation,
+        variables: equation.variables.clone(),
+    }
+}
+
+/// The best fit of `best_fit`, with the values of x = g(y) taken as they are.
+fn fit(equations: &[(&Equation, Env)], w: f32, h: f32) -> View {
     let mut x_range: Option<(f64, f64)> = None;
     let mut y_range: Option<Extent> = None;
     let widen = |range: &mut Option<(f64, f64)>, lo: f64, hi: f64| {
@@ -1035,5 +1072,25 @@ mod tests {
         let view = fit("e^x");
         assert!(view.y_min < 0.0 && view.y_max > 1.0, "{view:?}");
         assert_eq!(best_fit(&[], w, h), View::DEFAULT);
+    }
+
+    #[test]
+    fn best_fit_of_inverse_functions() {
+        let (w, h) = (2140.0, 1308.0);
+        let fit = |text: &str| best_fit(&[(&equation(text), Env::RADIANS)], w, h);
+        let proportional = |v: &View| (v.width() / v.height() - w as f64 / h as f64).abs() < 1e-9;
+        // x = y² is y = x² on its side, with a tenth of room left of the vertex.
+        let view = fit("x=y^2");
+        assert!(
+            (view.x_min + 3.025).abs() < 0.01 && (view.x_max - 30.25).abs() < 0.01,
+            "{view:?}"
+        );
+        assert!((view.y_min + view.y_max).abs() < 1e-9 && proportional(&view));
+        // x = 3, like y = 3, is shown with the axis next to it, at equal scales.
+        let view = fit("x=3");
+        assert!(view.x_min < 0.0 && view.x_max > 3.0, "{view:?}");
+        assert!(proportional(&view), "{view:?}");
+        let view = fit("y=3");
+        assert!(view.y_min < 0.0 && view.y_max > 3.0 && proportional(&view));
     }
 }

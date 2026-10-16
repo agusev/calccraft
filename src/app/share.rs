@@ -6,7 +6,8 @@ use eframe::egui::{Color32, ColorImage};
 use super::region::formats;
 use super::strings::tr;
 
-/// What a share holds.
+/// What a share holds. Other systems have no share sheet, so nothing reads it there.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) struct Content {
     pub(super) title: String,
     /// The graph, the equations and the variables, as `html` writes them.

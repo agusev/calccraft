@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn every_language_has_calccraft_strings() {
         let english = parse(own(ENGLISH));
-        assert_eq!(english.len(), 3);
+        assert_eq!(english.len(), 4);
         for language in languages() {
             let table = parse(own(language));
             for key in english.keys() {
@@ -421,6 +421,11 @@ mod tests {
         assert_eq!(load("de-DE").get("CalcCraft.Language"), "Sprache");
         assert_eq!(load("de-DE").get("HistoryLabel.Text"), "Verlauf");
         assert_eq!(load("ja-JP").get("CalcCraft.RegionalFormat"), "地域設定");
+        // Every translation has the place of its link.
+        for language in languages() {
+            let contribute = load(language).get("CalcCraft.Contribute");
+            assert_eq!(contribute.matches("%1").count(), 1, "{language}");
+        }
         // Languages without their own section fall back to English.
         assert_eq!(load("ar-SA").get("CalcCraft.Language"), "Language");
         assert_eq!(languages().count(), LOCALES.len() - UNSUPPORTED.len());

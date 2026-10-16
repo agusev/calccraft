@@ -9,10 +9,11 @@ use eframe::egui::{
 };
 
 use super::date_view::{list_item, popup_frame};
+use super::icons::{ICON_BACKSPACE, ICON_CHEVRON_DOWN, icon_label};
 use super::strings::{tr, tr_format, unit_abbreviation, unit_name};
 use super::{
-    CalculatorApp, Flyout, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, KEY_FLASH, Kind, MARGIN, RADIUS,
-    access, icons, layout_elided_left, light, negate_label, numbers, semibold, symbols, text,
+    CalculatorApp, Flyout, GAP, KEY_FLASH, Kind, MARGIN, RADIUS, access, layout_elided_left, light,
+    negate_label, numbers, repaint_for_flash, semibold, symbols, text,
 };
 use crate::converter::{Converter, ConverterCommand, Region};
 
@@ -165,8 +166,9 @@ impl CalculatorApp {
     pub(super) fn handle_converter_keyboard(&mut self, ctx: &Context) {
         let now = ctx.input(|i| i.time);
         for event in ctx.input(|i| i.events.clone()) {
-            // An open drop-down takes the keyboard; Esc closes it.
-            if self.converter.popup.is_some() {
+            // An open drop-down or menu takes the keyboard (Windows' `HonorShortcuts(false)`
+            // while the menu is open); Esc closes it.
+            if self.converter.popup_open() || self.flyout == Flyout::Navigation {
                 if matches!(
                     event,
                     Event::Key {
@@ -174,8 +176,9 @@ impl CalculatorApp {
                         pressed: true,
                         ..
                     }
-                ) {
-                    self.converter.close_popup();
+                ) && !self.converter.close_popup()
+                {
+                    self.flyout = Flyout::None;
                 }
                 continue;
             }
@@ -217,9 +220,7 @@ impl CalculatorApp {
                 _ => {}
             }
         }
-        if self.converter.flash.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(KEY_FLASH));
-        }
+        repaint_for_flash(ctx, &mut self.converter.flash, now);
     }
 
     fn converter_press(&mut self, command: ConverterCommand, now: f64) {
@@ -399,11 +400,7 @@ impl CalculatorApp {
         let name = unit_name(converter.units()[index].key);
         let painter = ui.painter();
         let label = painter.layout_no_wrap(name.to_string(), FontId::proportional(14.0), p.text);
-        let chevron = painter.layout_job(if self.has_icons {
-            text(&ICON_CHEVRON_DOWN.to_string(), 12.0, icons())
-        } else {
-            text("⌄", 12.0, FontFamily::Proportional)
-        });
+        let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, 12.0));
         // `Margin="12,0,0,0"`, `Padding="4,0,0,0"`, and the chevron's `Margin="8,3,12,0"`.
         let width = 4.0 + label.size().x + 8.0 + chevron.size().x + 12.0;
         let rect = Rect::from_min_size(pos2(row.left() + 12.0, row.top()), vec2(width, height));
@@ -694,10 +691,7 @@ impl CalculatorApp {
                     Kind::Operator,
                     text("CE", operator_size, FontFamily::Proportional),
                 ),
-                Backspace => (
-                    Kind::Operator,
-                    self.icon(ICON_BACKSPACE, "⌫", operator_size),
-                ),
+                Backspace => (Kind::Operator, icon_label(ICON_BACKSPACE, operator_size)),
             };
             let flash =
                 matches!(self.converter.flash, Some((c, t)) if c == command && now - t < KEY_FLASH);

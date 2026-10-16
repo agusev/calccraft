@@ -49,7 +49,7 @@ own `NOT_STARTED` entry.
 | **Phase 8: Application Shell, UX & Accessibility** | 11 | 10 | 0 | 1 | 0 |
 | **TOTAL** | **67** | **65** | **0** | **1** | **1** |
 
-*Last updated: 2026-10-16 (CalcCraft 0.9.0)*
+*Last updated: 2026-10-16 (CalcCraft 1.0.0)*
 
 ---
 
@@ -237,7 +237,8 @@ UI code and is covered by unit tests.*
 - **Rust:** `src/app.rs` (`draw_keypad`, `keypad_label`, `button_flash`)
 - **Description:** `0`–`9`, `.`, `+ − × ÷`, `=`, `⌫`, `CE`, `C`, `%`, plus the memory row.
 - **Acceptance Criteria:**
-  - Same 4 × 6 grid, labels, icons (Segoe Fluent Icons) and colors as Windows 11.
+  - Same 4 × 6 grid, labels, icons and colors as Windows 11 (the icons are Fluent System
+    Icons built into the app, like Windows' Segoe Fluent Icons).
   - A second decimal point in one operand is ignored.
   - The display shrinks long numbers to fit, with en-US grouping (`1,234,567`).
 
@@ -278,6 +279,8 @@ UI code and is covered by unit tests.*
   - The window is always on top and shrinks to 320 × 394; leaving the mode restores the
     previous size.
   - The menu, title, history button and memory row are hidden; a back button returns to full view.
+  - Only the result shows, without the expression line (`DisplayModeAlwaysOnTop`), and the
+    history and memory shortcuts do nothing.
 - **Differences:** the keypad rows never hide when the window gets very short.
 
 #### `FEAT-STD-005` Keyboard Input & Hotkeys for Standard Mode
@@ -294,6 +297,9 @@ UI code and is covered by unit tests.*
   - `Ctrl+H` (history), `Ctrl+Shift+D` (clear history)
 - **Acceptance Criteria:**
   - All hotkeys work without focusing a button, and the pressed key's button flashes.
+  - While the history or memory flyout is open, the keypad and memory keys do nothing
+    (`EnableControls(false)`); `Esc`, `Ctrl+H`, `Ctrl+Shift+D`, copy and paste still work.
+  - `Alt` with any other key types nothing.
   - Buttons never take keyboard focus, so `Enter` always means `=` (see AGENTS.md pitfalls).
 
 #### `FEAT-STD-006` Clipboard Copy and Paste (numbers)
@@ -648,7 +654,7 @@ mode of `CCalcEngine`, run by `Calculator::programmer()` in `src/engine.rs`), UI
     `255u`, `1_000`, the word size's limits) and types it in.
   - Both themes, the keyboard focus and Narrator names as in Windows.
 - **Differences:** the keypad switch, Bitwise and Bit shift icons are drawn in code and the
-  shift keys' `«` and `»` are Segoe Fluent chevrons, since Windows takes them from the Calculator's
+  shift keys' `«` and `»` are two chevron icons, since Windows takes them from the Calculator's
   own icon font. Windows leaves `«` enabled in the error state; CalcCraft disables both shift keys.
   The decimal key shows `.` in every region, as in the Standard mode.
 
@@ -1033,9 +1039,9 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
   calculation, and 13 converters. CalcCraft lists all but the Currency converter. Windows draws
   the Graphing and Programmer icons and six converter icons (Volume, Weight, Temperature, Speed,
   Data, Angle) from the Calculator's own icon font, whose license limits it to Windows;
-  CalcCraft draws the Graphing icon in code and uses similar Segoe Fluent Icons glyphs for the
-  others (`</>` for Programmer). The Scientific mode's beaker is Windows' own glyph, which Segoe
-  Fluent Icons has. As in Windows, switching between the Standard, Scientific
+  CalcCraft draws the Graphing icon in code and uses similar Fluent System Icons for the
+  others (`</>` for Programmer, a cube for Volume, scales for Weight). The Scientific mode's
+  beaker matches Windows' own glyph. As in Windows, switching between the Standard, Scientific
   and Programmer modes starts the other one over, and they share the memory. The mode hotkeys
   are `FEAT-SHELL-010`.
 
@@ -1267,3 +1273,4 @@ Windows source in `../win-calculator`.
 | 2026-10-16 | Claude Code | `FEAT-PROG-001`–`FEAT-PROG-008` | Finished Phase 4 (CalcCraft 0.5.0): Windows' integer mode of `CCalcEngine` in `src/engine/integer.rs` and `Calculator::programmer()` (radixes, word sizes, bitwise operators, shifts, rotations, bit toggling, `DisplayNum` truncation, Programmer paste rules), and the Programmer mode's UI in `src/app/programmer_view.rs` after `Calculator.xaml` and the `CalculatorProgrammer*.xaml` views; added `FEAT-PROG-008` for the mode's UI. Updated `FEAT-CORE-003`, `FEAT-CORE-004`, `FEAT-SHELL-001`, `-002` and `-010`; checked side by side with the Windows Calculator |
 | 2026-10-16 | Claude Code | `FEAT-SCI-001`–`FEAT-SCI-009` | Finished Phase 3 (CalcCraft 0.6.0): the Scientific mode. `src/engine/math.rs` computes powers, roots, logarithms, trigonometric and hyperbolic functions and the gamma function on `num-bigint` floats with `ratpak`'s domain rules; `src/engine.rs` adds `^`, `yroot`, `log base` and the Scientific `mod`, the functions with Windows' expression names, π, e and rand, `exp` entry, F-E, angle units and 32 digits; `src/app/scientific_view.rs` draws `CalculatorScientificOperators.xaml` with `2nd` and the Trigonometry and Function menus. Added `FEAT-SCI-009` for the mode's UI. Also fixed the error state (`.` disabled, `=` enabled, as calc.exe does) and e-notation paste, and the history and memory lists wrap long numbers. Updated `FEAT-CORE-003`, `-008`, `FEAT-STD-007`, `FEAT-SHELL-001` and `-010`; checked side by side with the Windows Calculator |
 | 2026-10-16 | Claude Code | `FEAT-GRAPH-001`–`FEAT-GRAPH-006` | Finished Phase 7 (CalcCraft 0.9.0): the Graphing mode. `src/graphing.rs` parses the equations (implicit multiplication, variables, functions without parentheses, Windows' syntax errors) and sorts them into y = f(x), x = g(y) and implicit relations, also as inequalities; `src/graphing/plot.rs` samples functions (broken at asymptotes), traces implicit curves by marching squares, marks inequality regions, fits the view and snaps the tracer; `src/graphing/analysis.rs` and `exact.rs` find the key graph features with exact values, per period for periodic functions. The UI (`src/app/graphing_view.rs`, `graph_canvas.rs`, `graphing_keypad.rs`) follows `GraphingCalculator.xaml`, `EquationInputArea.xaml`, `GraphingNumPad.xaml`, `KeyGraphFeaturesPanel.xaml` and `GraphingSettings.xaml`, with 152 new strings in 60 languages; the share button opens the Windows share sheet (`src/app/share.rs`). Updated `FEAT-SHELL-001` and `FEAT-SHELL-010` (`Alt+3`) |
+| 2026-10-16 | Claude Code | ALL | Prepared CalcCraft 1.0.0. The icons are a subset of Microsoft's Fluent System Icons built into the executable (`assets/fonts/CalcCraftIcons.ttf`, made by `tools/icon-font.py` at Windows' Segoe Fluent Icons code points, `src/app/icons.rs`), and Inter, also built in, replaces Segoe UI where it's missing; the text fallbacks for a missing icon font are gone. Reviewed every module and fixed: a power that hung the app (`1.00000000000000001^(1e40+.5)`), pastes that lost a sign (`-0.05`), kept going after an error or turned F-E off; equations that crashed (deep nesting) or froze (huge derivatives) the Graphing mode, wrong ranges and periods in the function analysis, `ax = 3` read as f(x), the x = g(y) view; a click into a Graph options box that moved the view, Esc closing two things, stale plots after a region change, variables outside their slider, drop-downs off the window, `G6` formatting; the keyboard flash that repainted forever, shortcuts in keep-on-top, keys reaching the keypad under the history and memory flyouts or the converters under the menu, `Alt` chords that typed, the expression line in keep-on-top, re-pressed radix and word size keys, `E` for `exp`; noisy large "About equal to" values, mixed calendar eras, multi-character separators, th-TH's picker pattern. The Settings page's contribute sentence is translated (`CalcCraft.Contribute`). CI and releases cover Windows, Linux and macOS (x64) |
