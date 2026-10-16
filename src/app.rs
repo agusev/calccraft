@@ -117,6 +117,17 @@ impl Mode {
             Mode::Converter(category) => category.name(),
         }
     }
+
+    /// The mode an `Alt` + digit shortcut opens. Windows' `NavCategory` gives the
+    /// calculators `Alt+1` (Standard) to `Alt+5` (Date calculation) and the converters
+    /// none; Scientific, Graphing and Programmer don't exist here yet.
+    fn for_alt_key(key: Key) -> Option<Mode> {
+        match key {
+            Key::Num1 => Some(Mode::Standard),
+            Key::Num5 => Some(Mode::DateCalculation),
+            _ => None,
+        }
+    }
 }
 
 /// What fills the window: the calculator or, as in Windows, the Settings page instead.
@@ -273,6 +284,22 @@ impl CalculatorApp {
     }
 
     // -------------------------------------------------------------- keyboard
+
+    /// The mode shortcuts: `Alt+1` … `Alt+5` (see `Mode::for_alt_key`) and `Ctrl+E`
+    /// for Date calculation. As in Windows' `KeyboardShortcutManager`, they do nothing
+    /// in keep-on-top mode or with `AltGr`, which arrives as `Ctrl+Alt`. The keys are
+    /// consumed, so the mode that opens doesn't also type the digit.
+    fn handle_mode_keys(&mut self, ctx: &Context) {
+        if self.compact || self.page != Page::Calculator {
+            return;
+        }
+        let chosen = ctx.input_mut(|input| take_mode_shortcut(&mut input.events));
+        if let Some(mode) = chosen
+            && mode != self.mode
+        {
+            self.set_mode(mode);
+        }
+    }
 
     fn handle_keyboard(&mut self, ctx: &Context) {
         if self.page == Page::Settings {
@@ -1562,6 +1589,7 @@ impl eframe::App for CalculatorApp {
         }
         self.docked =
             self.mode == Mode::Standard && !self.compact && ui.max_rect().width() >= DOCK_WIDTH;
+        self.handle_mode_keys(&ctx);
         match self.mode {
             _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
             Mode::DateCalculation => self.handle_date_keyboard(&ctx),
@@ -1844,6 +1872,41 @@ fn link_button(p: &Palette, ui: &Ui, left_center: Pos2, label: &str, id: Id) -> 
     response.clicked()
 }
 
+/// Removes the mode shortcuts (`Alt` + digit, `Ctrl+E`) from `events` and returns the
+/// mode the first one opens. `Ctrl+Alt` is `AltGr`, which types characters, so it's left
+/// alone. Text that comes with a shortcut's digit goes too.
+fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
+    let mut chosen = None;
+    let mut consumed = false;
+    events.retain(|event| match event {
+        Event::Key {
+            key,
+            pressed,
+            modifiers,
+            ..
+        } if modifiers.alt && !modifiers.ctrl => match Mode::for_alt_key(*key) {
+            Some(mode) => {
+                chosen = chosen.or(pressed.then_some(mode));
+                consumed = true;
+                false
+            }
+            None => true,
+        },
+        Event::Key {
+            key: Key::E,
+            pressed,
+            modifiers,
+            ..
+        } if modifiers.command_only() => {
+            chosen = chosen.or(pressed.then_some(Mode::DateCalculation));
+            false
+        }
+        Event::Text(_) if consumed => false,
+        _ => true,
+    });
+    chosen
+}
+
 /// Keys that arrive as text: digits and operators, as in Windows.
 fn char_command(c: char) -> Option<Command> {
     Some(match c {
@@ -1966,5 +2029,54 @@ pub fn window_icon() -> egui::IconData {
         rgba: crate::icon::rgba(SIZE),
         width: SIZE,
         height: SIZE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn mode_shortcuts() {
+        let mut events = vec![key(Key::Num5, Modifiers::ALT), Event::Text("5".into())];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::DateCalculation));
+        assert!(events.is_empty(), "the digit isn't typed");
+
+        let mut events = vec![key(Key::Num1, Modifiers::ALT)];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Standard));
+
+        let mut events = vec![key(Key::E, Modifiers::COMMAND)];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::DateCalculation));
+
+        // Scientific, Graphing and Programmer don't exist yet.
+        let mut events = vec![key(Key::Num2, Modifiers::ALT)];
+        assert_eq!(take_mode_shortcut(&mut events), None);
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn mode_shortcuts_leave_other_keys() {
+        // AltGr arrives as Ctrl+Alt and types characters.
+        let alt_gr = Modifiers::ALT | Modifiers::CTRL;
+        let mut events = vec![key(Key::Num5, alt_gr), Event::Text("5".into())];
+        assert_eq!(take_mode_shortcut(&mut events), None);
+        assert_eq!(events.len(), 2);
+
+        let mut events = vec![key(Key::E, Modifiers::COMMAND | Modifiers::SHIFT)];
+        assert_eq!(take_mode_shortcut(&mut events), None);
+
+        let mut events = vec![key(Key::Num5, Modifiers::NONE), Event::Text("5".into())];
+        assert_eq!(take_mode_shortcut(&mut events), None);
+        assert_eq!(events.len(), 2);
     }
 }
