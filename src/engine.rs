@@ -11,12 +11,20 @@
 //! The state and the order of the steps follow the Windows source closely, so
 //! the display and the expression line behave like Windows, quirks included.
 //! The names of the Windows fields are given in the comments.
+//!
+//! `Calculator::programmer()` is Windows' integer mode for the Programmer mode: the same
+//! engine with precedence, a radix and a word size (see `integer.rs`).
+
+mod integer;
 
 use std::cmp::Ordering;
 
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{Signed, Zero};
+use num_traits::{Signed, ToPrimitive, Zero};
+
+use integer::IntegerMode;
+pub use integer::{Radix, WordSize};
 
 pub type Number = BigRational;
 
@@ -46,25 +54,54 @@ pub enum Op {
     Subtract,
     Multiply,
     Divide,
+    /// The Programmer mode's operators: the remainder (`%`), the bitwise operators, and
+    /// the shifts (`Lsh` and the arithmetic and logical `Rsh`).
+    Mod,
+    And,
+    Or,
+    Xor,
+    Nand,
+    Nor,
+    LeftShift,
+    RightShift,
+    RightShiftLogical,
 }
 
 impl Op {
     /// The symbol in the expression line: Windows' engine strings, where
-    /// subtraction is a plain hyphen.
-    fn symbol(self) -> &'static str {
+    /// subtraction is a plain hyphen. They aren't translated.
+    fn symbol(self, integer: bool) -> &'static str {
         match self {
             Op::Add => "+",
             Op::Subtract => "-",
             Op::Multiply => "×",
             Op::Divide => "÷",
+            // `SIDS_PROGRAMMER_MOD`; the Scientific mode writes `Mod` (`SIDS_MOD`).
+            Op::Mod if integer => "%",
+            Op::Mod => "Mod",
+            Op::And => "AND",
+            Op::Or => "OR",
+            Op::Xor => "XOR",
+            Op::Nand => "NAND",
+            Op::Nor => "NOR",
+            Op::LeftShift => "Lsh",
+            Op::RightShift | Op::RightShiftLogical => "Rsh",
         }
     }
 
-    /// Higher binds tighter (`NPrecedenceOfOp`).
+    /// Higher binds tighter (`NPrecedenceOfOp`). `OR` and `XOR` rank with no
+    /// operator at all.
     fn precedence(self) -> u8 {
         match self {
+            Op::Or | Op::Xor => 0,
+            Op::And | Op::Nand | Op::Nor => 1,
             Op::Add | Op::Subtract => 2,
-            Op::Multiply | Op::Divide => 3,
+            Op::Multiply
+            | Op::Divide
+            | Op::Mod
+            | Op::LeftShift
+            | Op::RightShift
+            | Op::RightShiftLogical => 3,
         }
     }
 }
@@ -81,6 +118,13 @@ pub enum Func {
     Square,
     SquareRoot,
     Negate,
+    /// The Programmer mode's functions: `NOT`, and rotations by one bit, circular or
+    /// through the carry bit.
+    Not,
+    RotateLeft,
+    RotateRight,
+    RotateLeftCarry,
+    RotateRightCarry,
 }
 
 impl Func {
@@ -91,7 +135,22 @@ impl Func {
             Func::Square => "sqr",
             Func::SquareRoot => "√",
             Func::Negate => "negate",
+            Func::Not => "NOT",
+            Func::RotateLeft | Func::RotateLeftCarry => "RoL",
+            Func::RotateRight | Func::RotateRightCarry => "RoR",
         }
+    }
+
+    /// Whether the function exists only in the Programmer mode.
+    fn is_integer(self) -> bool {
+        matches!(
+            self,
+            Func::Not
+                | Func::RotateLeft
+                | Func::RotateRight
+                | Func::RotateLeftCarry
+                | Func::RotateRightCarry
+        )
     }
 
     fn apply(self, v: &Number) -> Result<Number, CalcError> {
@@ -101,6 +160,8 @@ impl Func {
             Func::Square => normalize(v * v),
             Func::SquareRoot => sqrt(v),
             Func::Negate => Ok(-v),
+            // The integer functions need the word size; `Calculator::unary` does them.
+            _ => Ok(v.clone()),
         }
     }
 }
@@ -125,6 +186,11 @@ pub enum Command {
     MemoryAdd,
     MemorySubtract,
     MemoryStore,
+    /// The Programmer mode's bit toggling keypad: flips bit 0 to 63 (`IDC_BINPOS0` …).
+    ToggleBit(u8),
+    /// The Programmer mode's radix (`IDM_HEX` …) and word size (`IDM_QWORD` …).
+    Radix(Radix),
+    WordSize(WordSize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +199,8 @@ pub enum CalcError {
     Undefined,
     InvalidInput,
     Overflow,
+    /// A shift by the word size or more (`CALC_E_NORESULT`).
+    NoResult,
 }
 
 impl CalcError {
@@ -143,6 +211,7 @@ impl CalcError {
             CalcError::Undefined => "Result is undefined",
             CalcError::InvalidInput => "Invalid input",
             CalcError::Overflow => "Overflow",
+            CalcError::NoResult => "Result not defined",
         }
     }
 
@@ -153,6 +222,7 @@ impl CalcError {
             CalcError::InvalidInput => 100,
             CalcError::Undefined => 101,
             CalcError::Overflow => 107,
+            CalcError::NoResult => 108,
         }
     }
 }
@@ -180,6 +250,7 @@ enum Key {
     Clear,
     ClearEntry,
     Recall,
+    BitToggle,
 }
 
 impl Key {
@@ -196,11 +267,15 @@ impl Key {
             Command::OpenParen => Key::OpenParen,
             Command::CloseParen => Key::CloseParen,
             Command::MemoryRecall => Key::Recall,
+            Command::ToggleBit(_) => Key::BitToggle,
+            // Settings, not commands (`IsGuiSettingOpCode`).
             Command::Backspace
             | Command::MemoryClear
             | Command::MemoryAdd
             | Command::MemorySubtract
-            | Command::MemoryStore => return None,
+            | Command::MemoryStore
+            | Command::Radix(_)
+            | Command::WordSize(_) => return None,
         })
     }
 }
@@ -209,7 +284,8 @@ impl Key {
 #[derive(Clone, Debug, Default)]
 struct Input {
     negative: bool,
-    /// Digits and at most one decimal point; empty means 0.
+    /// Digits (`0`–`9`, and `A`–`F` in the Programmer mode) and at most one decimal
+    /// point; empty means 0.
     digits: String,
 }
 
@@ -218,9 +294,23 @@ impl Input {
         *self = Self::default();
     }
 
-    /// Adds a digit unless the 16-digit limit is reached. A leading zero is
-    /// never stored, and `0.` doesn't count its zero against the limit.
-    fn try_add_digit(&mut self, digit: u8) -> bool {
+    /// Adds a digit unless the limit is reached: 16 digits, or in the Programmer mode as
+    /// many as the word holds. A leading zero is never stored, and `0.` doesn't count
+    /// its zero against the limit.
+    fn try_add_digit(&mut self, digit: u8, integer: Option<&IntegerMode>) -> bool {
+        if let Some(mode) = integer {
+            if self.digits.is_empty() && digit == 0 {
+                return true;
+            }
+            let c = char::from_digit(digit.into(), 16)
+                .unwrap_or('0')
+                .to_ascii_uppercase();
+            if !mode.digit_fits(&self.digits, c, self.negative) {
+                return false;
+            }
+            self.digits.push(c);
+            return true;
+        }
         let mut max = MAX_DIGITS as usize;
         if self.digits.contains('.') {
             max += 1;
@@ -250,9 +340,14 @@ impl Input {
         true
     }
 
-    /// Flips the sign; an empty input (0) stays positive.
-    fn toggle_sign(&mut self) {
+    /// Flips the sign; an empty input (0) stays positive. In the Programmer mode a
+    /// negative number that wouldn't fit as a positive one keeps its sign.
+    fn toggle_sign(&mut self, integer: Option<&IntegerMode>) -> bool {
+        if integer.is_some_and(|mode| !mode.sign_toggles(&self.digits, self.negative)) {
+            return false;
+        }
         self.negative = !self.digits.is_empty() && !self.negative;
+        true
     }
 
     fn backspace(&mut self) {
@@ -275,8 +370,17 @@ impl Input {
         format!("{sign}{digits}")
     }
 
-    fn value(&self) -> Number {
-        parse_decimal(&self.text())
+    /// The typed number's value, in the Programmer mode's radix (`CalcInput::ToRational`).
+    fn value(&self, integer: Option<&IntegerMode>) -> Number {
+        match integer {
+            Some(mode) => {
+                let magnitude = BigInt::parse_bytes(self.digits.as_bytes(), mode.radix.base())
+                    .unwrap_or_default();
+                let v = Number::from_integer(magnitude);
+                if self.negative { -v } else { v }
+            }
+            None => parse_decimal(&self.text()),
+        }
     }
 
     /// The input with thousands separators: `-1234.50` → `-1,234.50`.
@@ -301,12 +405,29 @@ struct Pending {
     op: Option<Op>,
 }
 
+/// A piece of the expression line. An operand keeps its value, so that a new radix can
+/// write it again (`COpndCommand`).
+#[derive(Clone, Debug)]
+struct Token {
+    text: String,
+    value: Option<Number>,
+}
+
+impl Token {
+    fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            value: None,
+        }
+    }
+}
+
 /// The expression line being built, as a list of tokens (`CHistoryCollector`).
 /// Indices point into `tokens`; like in Windows, they are not adjusted when a
 /// token is inserted before them.
 #[derive(Clone, Debug, Default)]
 struct HistoryLine {
-    tokens: Vec<String>,
+    tokens: Vec<Token>,
     /// Where the last operand starts (`m_lastOpStartIndex`).
     last_operand_start: Option<usize>,
     /// Where the last binary operator starts (`m_lastBinOpStartIndex`).
@@ -319,7 +440,7 @@ struct HistoryLine {
 
 impl HistoryLine {
     fn push(&mut self, token: impl Into<String>) -> usize {
-        self.tokens.push(token.into());
+        self.tokens.push(Token::new(token));
         self.tokens.len() - 1
     }
 
@@ -327,10 +448,23 @@ impl HistoryLine {
         self.last_operand_start.is_some()
     }
 
-    fn add_operand(&mut self, text: String) {
-        self.last_operand_start = Some(self.push(text));
+    fn add_operand(&mut self, text: String, value: Number) {
+        self.tokens.push(Token {
+            text,
+            value: Some(value),
+        });
+        self.last_operand_start = Some(self.tokens.len() - 1);
         self.last_operand_brace = false;
         self.last_bin_op_start = None;
+    }
+
+    /// Writes every operand again (`UpdateHistoryExpression`, for a new radix).
+    fn rewrite_operands(&mut self, write: impl Fn(&Number) -> String) {
+        for token in &mut self.tokens {
+            if let Some(value) = &token.value {
+                token.text = write(value);
+            }
+        }
     }
 
     fn remove_last_operand(&mut self) {
@@ -339,21 +473,21 @@ impl HistoryLine {
         }
     }
 
-    fn add_bin_op(&mut self, op: Op) {
+    fn add_bin_op(&mut self, symbol: &str) {
         self.last_bin_op_start = Some(self.push(" "));
-        self.push(op.symbol());
+        self.push(symbol);
         self.push(" ");
         self.last_operand_start = None;
     }
 
-    fn change_last_bin_op(&mut self, op: Op, precedence_inversion: bool) {
+    fn change_last_bin_op(&mut self, symbol: &str, precedence_inversion: bool) {
         if let Some(start) = self.last_bin_op_start {
             self.tokens.truncate(start);
         }
         if precedence_inversion {
             self.enclose_in_brackets();
         }
-        self.add_bin_op(op);
+        self.add_bin_op(symbol);
     }
 
     fn push_operand_start(&mut self, start: Option<usize>) {
@@ -385,7 +519,8 @@ impl HistoryLine {
     /// inversion turns `1 + 2 -` into `(1 + 2) ×`.
     fn enclose_in_brackets(&mut self) {
         let start = self.operand_starts.last().copied().flatten().unwrap_or(0);
-        self.tokens.insert(start.min(self.tokens.len()), "(".into());
+        self.tokens
+            .insert(start.min(self.tokens.len()), Token::new("("));
         self.push(")");
     }
 
@@ -397,7 +532,8 @@ impl HistoryLine {
             format!("{name}(")
         };
         let at = self.last_operand_start.unwrap_or(self.tokens.len());
-        self.tokens.insert(at.min(self.tokens.len()), text);
+        self.tokens
+            .insert(at.min(self.tokens.len()), Token::new(text));
         if !self.last_operand_brace {
             self.push(")");
         }
@@ -409,7 +545,7 @@ impl HistoryLine {
         let text: String = self
             .tokens
             .iter()
-            .map(|token| if token == "=" { " =" } else { token })
+            .map(|token| if token.text == "=" { " =" } else { &token.text })
             .collect();
         text.trim_end().to_string()
     }
@@ -419,6 +555,8 @@ impl HistoryLine {
 pub struct Calculator {
     /// Operator precedence and parentheses (`m_fPrecedence`, Scientific mode).
     precedence: bool,
+    /// The Programmer mode's integer mode (`m_fIntegerMode`) with its radix and word size.
+    integer: Option<IntegerMode>,
     input: Input,
     /// A number is being typed into `input` (`m_bRecord`).
     record: bool,
@@ -450,6 +588,7 @@ impl Default for Calculator {
     fn default() -> Self {
         Self {
             precedence: false,
+            integer: None,
             input: Input::default(),
             record: true,
             current: Number::zero(),
@@ -482,16 +621,102 @@ impl Calculator {
         }
     }
 
+    /// The Programmer mode's engine: precedence, parentheses and integer mode, starting
+    /// in decimal with 64-bit words, and no history (Windows' `SetProgrammerMode`).
+    pub fn programmer() -> Self {
+        Self {
+            precedence: true,
+            integer: Some(IntegerMode::default()),
+            ..Self::default()
+        }
+    }
+
     // --------------------------------------------------------------- queries
 
-    /// The big number on the display (or the error message).
+    /// The big number on the display (or the error message). In the Programmer mode
+    /// it is in the current radix, in digit groups, and a binary number starts with a
+    /// whole group of 4 digits.
     pub fn display(&self) -> String {
         if let Some(error) = self.error {
-            error.message().to_string()
-        } else if self.record {
+            return error.message().to_string();
+        }
+        if let Some(mode) = &self.integer {
+            let text = if self.record {
+                integer::group(&self.input.text(), mode.radix)
+            } else {
+                integer::group(&mode.format(&self.current, mode.radix), mode.radix)
+            };
+            return if mode.radix == Radix::Binary {
+                integer::pad_binary(&text)
+            } else {
+                text
+            };
+        }
+        if self.record {
             self.input.display()
         } else {
             format_number(&self.current)
+        }
+    }
+
+    /// The Programmer mode's radix.
+    pub fn radix(&self) -> Option<Radix> {
+        self.integer.map(|mode| mode.radix)
+    }
+
+    /// The Programmer mode's word size.
+    pub fn word_size(&self) -> Option<WordSize> {
+        self.integer.map(|mode| mode.word)
+    }
+
+    /// The value in every radix for the Programmer mode's radix list, in the order of
+    /// `Radix::ALL`, grouped like the display. Empty in the error state, as in Windows.
+    pub fn radix_values(&self) -> Option<[String; 4]> {
+        let mode = self.integer.as_ref()?;
+        if self.error.is_some() {
+            return Some(Default::default());
+        }
+        let value = self.shown_value();
+        Some(Radix::ALL.map(|radix| {
+            let text = integer::group(&mode.format(&value, radix), radix);
+            if radix == Radix::Binary {
+                integer::pad_binary(&text)
+            } else {
+                text
+            }
+        }))
+    }
+
+    /// The bits of the value shown, for the bit toggling keypad (bit 0 is the lowest).
+    pub fn bits(&self) -> u64 {
+        let Some(mode) = &self.integer else {
+            return 0;
+        };
+        let value = mode.truncate(&self.shown_value());
+        value.to_integer().to_u64().unwrap_or_default()
+    }
+
+    /// The number typed or the result shown (`GetCurrentResultForRadix`).
+    fn shown_value(&self) -> Number {
+        if self.record {
+            self.input.value(self.integer.as_ref())
+        } else {
+            self.current.clone()
+        }
+    }
+
+    /// Whether nothing has been typed and the display shows 0, when the Programmer
+    /// mode's keypad shows `C` instead of `CE` (`CCalcEngine::IsInputEmpty`).
+    pub fn is_input_empty(&self) -> bool {
+        self.input.digits.is_empty() && (self.record || self.number_text() == "0")
+    }
+
+    /// A value as the memory list shows it: like the display, in the Programmer mode in
+    /// its radix (without the binary padding).
+    pub fn format_value(&self, v: &Number) -> String {
+        match &self.integer {
+            Some(mode) => integer::group(&mode.format(v, mode.radix), mode.radix),
+            None => format_number(v),
         }
     }
 
@@ -526,6 +751,35 @@ impl Calculator {
 
     /// Whether a button is enabled (most buttons are disabled in the error state).
     pub fn is_enabled(&self, command: Command) -> bool {
+        if let Some(mode) = &self.integer {
+            // The Programmer mode: only the radix's digits, no decimal point and no
+            // Standard functions; `=`, the radix list and the bits stay enabled in the
+            // error state, as in `CalculatorProgrammerRadixOperators.xaml`.
+            match command {
+                Command::Digit(digit) => return u32::from(digit) < mode.radix.base(),
+                Command::Decimal | Command::Percent => return false,
+                Command::Function(func) if !func.is_integer() && func != Func::Negate => {
+                    return false;
+                }
+                Command::Equals | Command::Radix(_) => return true,
+                Command::ToggleBit(bit) => return u32::from(bit) < mode.word.bits(),
+                _ => {}
+            }
+        } else {
+            // The Programmer mode's keys don't exist elsewhere.
+            let programmer_only = match command {
+                Command::ToggleBit(_) | Command::Radix(_) | Command::WordSize(_) => true,
+                Command::Digit(digit) => digit > 9,
+                Command::Operator(op) => {
+                    !matches!(op, Op::Add | Op::Subtract | Op::Multiply | Op::Divide)
+                }
+                Command::Function(func) => func.is_integer(),
+                _ => false,
+            };
+            if programmer_only {
+                return false;
+            }
+        }
         match command {
             Command::Digit(_)
             | Command::Decimal
@@ -540,12 +794,13 @@ impl Calculator {
         }
     }
 
-    /// Text to copy to the clipboard (without thousands separators).
+    /// Text to copy to the clipboard (without thousands separators, and in the
+    /// Programmer mode without the spaces between digit groups).
     pub fn copy_text(&self) -> Option<String> {
         if self.error.is_some() {
             None
         } else {
-            Some(self.display().replace(',', ""))
+            Some(self.display().replace([',', ' '], ""))
         }
     }
 
@@ -557,9 +812,13 @@ impl Calculator {
         }
         if self.error.is_some() {
             // Windows' view model clears the error first; only digits and the
-            // decimal point then go on to start a new number.
+            // decimal point (and in the Programmer mode a bit or a new radix) then
+            // go on (`IsRecoverableCommand`, `SwitchProgrammerModeBase`).
             self.process(Command::Clear);
-            if !matches!(command, Command::Digit(_) | Command::Decimal) {
+            if !matches!(
+                command,
+                Command::Digit(_) | Command::Decimal | Command::ToggleBit(_) | Command::Radix(_)
+            ) {
                 return;
             }
         }
@@ -596,6 +855,9 @@ impl Calculator {
             }
             Command::OpenParen => self.open_paren(),
             Command::CloseParen => self.close_paren(),
+            Command::ToggleBit(bit) => self.toggle_bit(bit),
+            Command::Radix(radix) => self.set_radix(radix),
+            Command::WordSize(word) => self.set_word_size(word),
             // Only the steps in `begin` (finishing the typed number) apply here.
             Command::MemoryClear
             | Command::MemoryRecall
@@ -627,11 +889,18 @@ impl Calculator {
                 | Command::MemoryAdd
                 | Command::MemorySubtract
                 | Command::MemoryStore
-        ) || matches!(command, Command::Function(func) if func != Func::Negate);
+                | Command::ToggleBit(_)
+                | Command::Radix(_)
+                | Command::WordSize(_)
+        ) || matches!(command, Command::Function(func) if func != Func::Negate)
+            // `±` outside decimal works on the finished number.
+            || (command == Command::Function(Func::Negate)
+                && self.radix().is_some_and(|radix| radix != Radix::Decimal));
         if self.record {
             if ends_typing {
                 self.record = false;
-                self.current = self.input.value();
+                self.current = self.input.value(self.integer.as_ref());
+                self.display_num();
             }
         } else if matches!(command, Command::Digit(_) | Command::Decimal) {
             self.record = true;
@@ -648,8 +917,18 @@ impl Calculator {
         self.this_key = self.last_key;
     }
 
+    /// In the Programmer mode, the steps of Windows' `DisplayNum` that change the value:
+    /// a result becomes an unsigned integer of the word size, so `5 ÷ 2 × 2` is 4.
+    fn display_num(&mut self) {
+        if let Some(mode) = &self.integer
+            && !self.record
+        {
+            self.current = mode.truncate(&self.current);
+        }
+    }
+
     fn digit(&mut self, digit: u8) {
-        if !self.input.try_add_digit(digit) {
+        if !self.input.try_add_digit(digit, self.integer.as_ref()) {
             return self.forget_command();
         }
         if self.last_key == Key::CloseParen {
@@ -674,7 +953,7 @@ impl Calculator {
         self.no_prev_equ = true;
         if !self.line.operand_added() {
             self.line.add_open_brace();
-            self.line.add_operand(self.number_text());
+            self.add_operand();
             self.line.add_close_brace();
         }
         self.add_bin_op(Op::Multiply, true);
@@ -696,13 +975,14 @@ impl Calculator {
                     self.prev_op = None;
                 }
             }
-            self.line.change_last_bin_op(op, inversion);
+            self.line
+                .change_last_bin_op(op.symbol(self.integer.is_some()), inversion);
             self.refresh();
             return;
         }
 
         if !self.line.operand_added() {
-            self.line.add_operand(self.number_text());
+            self.add_operand();
         }
         if self.change_op {
             loop {
@@ -723,10 +1003,13 @@ impl Calculator {
                 }
                 self.current = self.operate(self.op);
                 self.prev_op = self.op;
-                if self.error.is_none() && !self.precedence {
-                    // Standard mode logs every step and continues from its result.
-                    self.complete_equation();
-                    self.line.add_operand(self.number_text());
+                if self.error.is_none() {
+                    self.display_num();
+                    if !self.precedence {
+                        // Standard mode logs every step and continues from its result.
+                        self.complete_equation();
+                        self.add_operand();
+                    }
                 }
                 match self.precedence_stack.last() {
                     Some(Pending { op: Some(_), .. }) => {
@@ -755,12 +1038,23 @@ impl Calculator {
             self.current = self.last.clone();
         }
         if !self.line.operand_added() {
-            self.line.add_operand(self.number_text());
+            self.add_operand();
         }
         self.line.add_unary_op(func.name());
         self.refresh();
-        match func.apply(&self.current) {
-            Ok(result) => self.current = result,
+        let result = match (&mut self.integer, func) {
+            (Some(mode), Func::Not) => Ok(mode.not(&self.current)),
+            (Some(mode), Func::RotateLeft) => Ok(mode.rotate(&self.current, true, false)),
+            (Some(mode), Func::RotateRight) => Ok(mode.rotate(&self.current, false, false)),
+            (Some(mode), Func::RotateLeftCarry) => Ok(mode.rotate(&self.current, true, true)),
+            (Some(mode), Func::RotateRightCarry) => Ok(mode.rotate(&self.current, false, true)),
+            _ => func.apply(&self.current),
+        };
+        match result {
+            Ok(result) => {
+                self.current = result;
+                self.display_num();
+            }
             Err(error) => self.display_error(error),
         }
     }
@@ -768,16 +1062,19 @@ impl Calculator {
     fn negate(&mut self) {
         // While typing, ± just flips the sign of the number being typed.
         if self.record {
-            self.input.toggle_sign();
+            if !self.input.toggle_sign(self.integer.as_ref()) {
+                self.forget_command();
+            }
             return;
         }
         if matches!(self.last_key, Key::Operator(_)) {
             self.current = self.last.clone();
         }
         if !self.line.operand_added() {
-            self.line.add_operand(self.number_text());
+            self.add_operand();
         }
         self.current = -self.current.clone();
+        self.display_num();
         self.line.add_unary_op(Func::Negate.name());
         self.refresh();
     }
@@ -800,7 +1097,7 @@ impl Calculator {
             Err(error) => return self.display_error(error),
         }
         self.check_and_add_last_bin_op_to_history(true);
-        self.line.add_operand(self.number_text());
+        self.add_operand();
         self.refresh();
     }
 
@@ -823,7 +1120,7 @@ impl Calculator {
             self.current = self.last.clone();
         }
         if !self.line.operand_added() {
-            self.line.add_operand(self.number_text());
+            self.add_operand();
         }
         self.resolve_pending();
         while self.precedence {
@@ -852,18 +1149,25 @@ impl Calculator {
     /// (`ResolveHighestPrecedenceOperation`).
     fn resolve_pending(&mut self) {
         let Some(op) = self.op else {
+            if self.error.is_none() {
+                self.display_num();
+            }
             return;
         };
         if self.no_prev_equ {
             self.hold = self.current.clone();
         } else {
             self.current = self.hold.clone();
-            self.line.add_bin_op(op);
-            self.line.add_operand(self.number_text());
+            self.display_num();
+            self.line.add_bin_op(op.symbol(self.integer.is_some()));
+            self.add_operand();
         }
         self.current = self.operate(Some(op));
         self.prev_op = Some(op);
         self.last = self.current.clone();
+        if self.error.is_none() {
+            self.display_num();
+        }
         self.no_prev_equ = false;
     }
 
@@ -903,6 +1207,9 @@ impl Calculator {
         self.this_key = Key::None;
         self.op = None;
         self.change_op = false;
+        if self.error.is_none() {
+            self.display_num();
+        }
     }
 
     fn close_paren(&mut self) {
@@ -913,7 +1220,7 @@ impl Calculator {
             self.current = self.last.clone();
         }
         if !self.line.operand_added() {
-            self.line.add_operand(self.number_text());
+            self.add_operand();
         }
         self.current = self.operate(self.op);
         self.prev_op = self.op;
@@ -938,12 +1245,18 @@ impl Calculator {
         self.last = value;
         self.op = op;
         self.change_op = op.is_some();
+        if self.error.is_none() {
+            self.display_num();
+        }
     }
 
     /// Resets the calculation; memory and history are kept (`IDC_CLEAR`).
     fn clear(&mut self) {
         if !self.change_op {
             self.check_and_add_last_bin_op_to_history(false);
+        }
+        if let Some(mode) = &mut self.integer {
+            mode.clear();
         }
         self.last = Number::zero();
         self.change_op = false;
@@ -972,7 +1285,11 @@ impl Calculator {
         let Some(op) = op else {
             return self.current.clone();
         };
-        match apply(&self.last, op, &self.current) {
+        let result = match &self.integer {
+            Some(mode) => mode.apply(&self.last, op, &self.current),
+            None => apply(&self.last, op, &self.current),
+        };
+        match result {
             Ok(result) => result,
             Err(error) => {
                 self.display_error(error);
@@ -986,9 +1303,13 @@ impl Calculator {
         self.error = Some(error);
     }
 
-    /// The current value as it appears in the expression line.
+    /// The current value as it appears in the expression line: in the Programmer mode
+    /// in its radix, signed in decimal.
     fn number_text(&self) -> String {
-        expression_number(&self.current)
+        match &self.integer {
+            Some(mode) => mode.format(&self.current, mode.radix),
+            None => expression_number(&self.current),
+        }
     }
 
     // -------------------------------------------------------- expression line
@@ -997,8 +1318,14 @@ impl Calculator {
         self.shown = self.line.render();
     }
 
+    /// Adds the current value to the expression line.
+    fn add_operand(&mut self) {
+        let text = self.number_text();
+        self.line.add_operand(text, self.current.clone());
+    }
+
     fn add_bin_op(&mut self, op: Op, refresh: bool) {
-        self.line.add_bin_op(op);
+        self.line.add_bin_op(op.symbol(self.integer.is_some()));
         if refresh {
             self.refresh();
         }
@@ -1011,17 +1338,20 @@ impl Calculator {
         self.complete_history_line();
     }
 
-    /// Logs the expression so far with the current result and starts a new one.
+    /// Logs the expression so far with the current result and starts a new one. The
+    /// Programmer mode has no history.
     fn complete_history_line(&mut self) {
-        let expression = self.line.render();
-        self.history.insert(
-            0,
-            HistoryEntry {
-                expression,
-                result: self.current.clone(),
-            },
-        );
-        self.history.truncate(HISTORY_LIMIT);
+        if self.integer.is_none() {
+            let expression = self.line.render();
+            self.history.insert(
+                0,
+                HistoryEntry {
+                    expression,
+                    result: self.current.clone(),
+                },
+            );
+            self.history.truncate(HISTORY_LIMIT);
+        }
         self.line = HistoryLine::default();
     }
 
@@ -1050,9 +1380,19 @@ impl Calculator {
 
     // ---------------------------------------------------- memory and history
 
+    /// A value for the memory: in the Programmer mode an integer of the word size, as
+    /// the memory follows the integer mode (`TruncateNumForIntMath`).
+    fn for_memory(&self, v: Number) -> Number {
+        match &self.integer {
+            Some(mode) => mode.truncate(&v),
+            None => v,
+        }
+    }
+
     fn memory_store(&mut self) {
         self.process(Command::MemoryStore);
-        self.memory.insert(0, self.current.clone());
+        let value = self.for_memory(self.current.clone());
+        self.memory.insert(0, value);
         self.memory.truncate(MEMORY_LIMIT);
     }
 
@@ -1067,6 +1407,7 @@ impl Calculator {
         self.begin(Command::MemoryRecall);
         self.current = value;
         self.check_and_add_last_bin_op_to_history(true);
+        self.display_num();
     }
 
     /// M+ (or M− when `subtract`) for memory slot `index`. With an empty memory,
@@ -1078,7 +1419,7 @@ impl Calculator {
         if self.memory.is_empty() {
             self.memory_store();
             if subtract {
-                self.memory[0] = -&self.memory[0];
+                self.memory[0] = self.for_memory(-&self.memory[0]);
             }
             return;
         }
@@ -1088,16 +1429,82 @@ impl Calculator {
             Command::MemoryAdd
         };
         self.process(command);
-        if let Some(cell) = self.memory.get_mut(index) {
+        if let Some(cell) = self.memory.get(index) {
             let sum = if subtract {
-                &*cell - &self.current
+                cell - &self.current
             } else {
-                &*cell + &self.current
+                cell + &self.current
             };
             if let Ok(sum) = normalize(sum) {
-                *cell = sum;
+                self.memory[index] = self.for_memory(sum);
             }
         }
+    }
+
+    /// The memory, to share it with another mode's engine: Windows has one memory for
+    /// the Standard and Programmer modes.
+    pub fn take_memory(&mut self) -> Vec<Number> {
+        std::mem::take(&mut self.memory)
+    }
+
+    pub fn set_memory(&mut self, memory: Vec<Number>) {
+        self.memory = memory;
+    }
+
+    /// Starts over, as when Windows switches to this mode: `C`, and the Programmer mode
+    /// goes back to decimal (`SetStandardMode`, `SetProgrammerMode`). Memory, history and
+    /// the word size stay.
+    pub fn reset(&mut self) {
+        self.process(Command::Clear);
+        if self.integer.is_some() {
+            self.process(Command::Radix(Radix::Decimal));
+        }
+    }
+
+    // ------------------------------------------------------------ programmer
+
+    /// Flips a bit of the value (the bit toggling keypad, `IDC_BINPOS0` …). Right after
+    /// an operator it works on the left operand, like a function.
+    fn toggle_bit(&mut self, bit: u8) {
+        if matches!(self.last_key, Key::Operator(_)) {
+            self.current = self.last.clone();
+        }
+        self.check_and_add_last_bin_op_to_history(true);
+        let Some(mode) = &self.integer else {
+            return;
+        };
+        if let Some(value) = mode.toggle_bit(&self.current, bit.into()) {
+            self.current = value;
+            self.display_num();
+        }
+    }
+
+    /// Switches the radix. The value stays; the expression line is written again in the
+    /// new radix (`UpdateHistoryExpression`), from the operands' unsigned values, so a
+    /// negative decimal operand comes back as a large positive number, as in Windows.
+    fn set_radix(&mut self, radix: Radix) {
+        let Some(mode) = &mut self.integer else {
+            return;
+        };
+        mode.radix = radix;
+        self.display_num();
+        if !self.line.tokens.is_empty() {
+            self.line
+                .rewrite_operands(|v| integer::to_radix(&v.to_integer(), radix));
+            self.refresh();
+        }
+    }
+
+    /// Switches the word size. A value whose highest bit is set counts as negative, so
+    /// a larger word extends its sign and a smaller one keeps only the low bits
+    /// (`SetRadixTypeAndNumWidth`).
+    fn set_word_size(&mut self, word: WordSize) {
+        let Some(mode) = &mut self.integer else {
+            return;
+        };
+        self.current = mode.signed(&self.current);
+        mode.word = word;
+        self.display_num();
     }
 
     pub fn memory_clear_item(&mut self, index: usize) {
@@ -1136,7 +1543,11 @@ impl Calculator {
     /// calculates 17. Invalid text shows `Invalid input`. Returns whether the
     /// text was accepted.
     pub fn paste(&mut self, text: &str) -> bool {
-        if !paste_is_valid(text, self.precedence) {
+        let valid = match &self.integer {
+            Some(mode) => programmer_paste_is_valid(text, mode),
+            None => paste_is_valid(text, self.precedence),
+        };
+        if !valid {
             self.display_error(CalcError::InvalidInput);
             return false;
         }
@@ -1144,7 +1555,10 @@ impl Calculator {
 
         // A `-` at the start or after an operator is a sign. Windows presses ±
         // after the first digit that isn't 0, and remembers a sign before `(`
-        // until the matching `)`.
+        // until the matching `)`. In the Programmer mode the letters are hex
+        // digits and `%` is the remainder; other characters, like the `x` of `0x1F`
+        // or a `u` suffix, are skipped.
+        let integer = self.integer.is_some();
         let mut first = true;
         let mut previous_operator = false;
         let mut negate = false;
@@ -1152,6 +1566,11 @@ impl Calculator {
         for c in text.chars() {
             let (command, mut can_negate) = match c {
                 '0'..='9' => (Command::Digit(c as u8 - b'0'), true),
+                'a'..='f' | 'A'..='F' if integer => {
+                    let digit = c.to_digit(16).unwrap_or_default() as u8;
+                    (Command::Digit(digit), false)
+                }
+                '%' if integer => (Command::Operator(Op::Mod), false),
                 '.' => (Command::Decimal, false),
                 '+' => (Command::Operator(Op::Add), false),
                 '-' => (Command::Operator(Op::Subtract), false),
@@ -1187,7 +1606,10 @@ impl Calculator {
                     }
                     None => send = false,
                 },
-                Command::Operator(_) => previous_operator = true,
+                // Not after `%` (`OnPaste` counts only these four).
+                Command::Operator(Op::Add | Op::Subtract | Op::Multiply | Op::Divide) => {
+                    previous_operator = true
+                }
                 _ => {}
             }
             if send {
@@ -1255,11 +1677,30 @@ fn paste_is_valid(text: &str, scientific: bool) -> bool {
         })
 }
 
+/// Checks pasted text like `CopyPasteManager` does in the Programmer mode: every operand
+/// must be a number of the radix that fits into the word size.
+fn programmer_paste_is_valid(text: &str, mode: &IntegerMode) -> bool {
+    let Some(expression) = clean_paste(text) else {
+        return false;
+    };
+    let operands = split_operands(&expression, integer::PASTE_CHARACTERS, false);
+    !operands.is_empty()
+        && operands
+            .iter()
+            .all(|operand| integer::paste_operand_is_valid(operand, mode.radix, mode.word))
+}
+
 /// Splits pasted text into operands at the binary operators
 /// (`CopyPasteManager::ExtractOperands`), looking only at the `valid` characters.
 /// A sign is not an operator. Empty when there are too many operands or an
 /// exponent is too long.
 pub(crate) fn extract_operands(expression: &str, valid: &str) -> Vec<String> {
+    split_operands(expression, valid, true)
+}
+
+/// `extract_operands`; without `exponents` (the Programmer mode, where `e` is a digit)
+/// there is no e-notation.
+fn split_operands(expression: &str, valid: &str, exponents: bool) -> Vec<String> {
     let chars: Vec<char> = expression.chars().collect();
     let mut operands = Vec::new();
     let mut last_index = 0;
@@ -1285,15 +1726,14 @@ pub(crate) fn extract_operands(expression: &str, valid: &str) -> Vec<String> {
             }
             previous_operator = false;
         } else if c == 'e' {
-            counting_exponent = true;
+            counting_exponent |= exponents;
             previous_operator = false;
         } else if "+-*/^%".contains(c) {
             let is_sign = (c == '+' || c == '-')
                 && (previous_open_paren
                     || start_of_expression
                     || previous_operator
-                    || i == 0
-                    || chars[i - 1] == 'e');
+                    || (exponents && (i == 0 || chars[i - 1] == 'e')));
             if is_sign {
                 previous_operator = false;
                 continue;
@@ -1383,6 +1823,8 @@ fn apply(left: &Number, op: Op, right: &Number) -> Result<Number, CalcError> {
         Op::Divide if right.is_zero() && left.is_zero() => return Err(CalcError::Undefined),
         Op::Divide if right.is_zero() => return Err(CalcError::DivideByZero),
         Op::Divide => left / right,
+        // The Programmer mode's operators run in `IntegerMode::apply`.
+        _ => return Err(CalcError::InvalidInput),
     };
     normalize(result)
 }
@@ -2014,5 +2456,382 @@ mod tests {
         assert!(operand_matches("3))", true));
         assert_eq!(operand_length("0.123"), 3);
         assert_eq!(operand_length("-12.5"), 3);
+    }
+
+    // ------------------------------------------------------------ programmer
+
+    /// Presses Programmer mode keys given as words: digits in upper case (`1F`),
+    /// `+ - * / % ( ) =`, `and or xor nand nor lsh rsh rshl not rol ror rolc rorc`,
+    /// `neg` (±), `c`, `ce`, `bs` (⌫), `hex dec oct bin`, `qword dword word byte`,
+    /// and `bit<n>` to flip a bit.
+    fn press_programmer(calc: &mut Calculator, keys: &str) {
+        for key in keys.split_whitespace() {
+            let command = match key {
+                "+" => Command::Operator(Op::Add),
+                "-" => Command::Operator(Op::Subtract),
+                "*" => Command::Operator(Op::Multiply),
+                "/" => Command::Operator(Op::Divide),
+                "%" => Command::Operator(Op::Mod),
+                "and" => Command::Operator(Op::And),
+                "or" => Command::Operator(Op::Or),
+                "xor" => Command::Operator(Op::Xor),
+                "nand" => Command::Operator(Op::Nand),
+                "nor" => Command::Operator(Op::Nor),
+                "lsh" => Command::Operator(Op::LeftShift),
+                "rsh" => Command::Operator(Op::RightShift),
+                "rshl" => Command::Operator(Op::RightShiftLogical),
+                "not" => Command::Function(Func::Not),
+                "rol" => Command::Function(Func::RotateLeft),
+                "ror" => Command::Function(Func::RotateRight),
+                "rolc" => Command::Function(Func::RotateLeftCarry),
+                "rorc" => Command::Function(Func::RotateRightCarry),
+                "neg" => Command::Function(Func::Negate),
+                "(" => Command::OpenParen,
+                ")" => Command::CloseParen,
+                "=" => Command::Equals,
+                "c" => Command::Clear,
+                "ce" => Command::ClearEntry,
+                "bs" => Command::Backspace,
+                "hex" => Command::Radix(Radix::Hex),
+                "dec" => Command::Radix(Radix::Decimal),
+                "oct" => Command::Radix(Radix::Octal),
+                "bin" => Command::Radix(Radix::Binary),
+                "qword" => Command::WordSize(WordSize::Qword),
+                "dword" => Command::WordSize(WordSize::Dword),
+                "word" => Command::WordSize(WordSize::Word),
+                "byte" => Command::WordSize(WordSize::Byte),
+                _ if key.starts_with("bit") => Command::ToggleBit(key[3..].parse().unwrap()),
+                _ if key
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c)) =>
+                {
+                    for c in key.chars() {
+                        calc.execute(Command::Digit(c.to_digit(16).unwrap() as u8));
+                    }
+                    continue;
+                }
+                _ => panic!("unknown key {key}"),
+            };
+            calc.execute(command);
+        }
+    }
+
+    fn run_programmer(keys: &str) -> (String, String) {
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, keys);
+        (calc.display(), calc.expression())
+    }
+
+    fn radix_values(calc: &Calculator) -> [String; 4] {
+        calc.radix_values().unwrap()
+    }
+
+    #[test]
+    fn programmer_bitwise_operators() {
+        assert_eq!(
+            run_programmer("12 and 10 ="),
+            ("8".into(), "12 AND 10 =".into())
+        );
+        assert_eq!(run_programmer("12 or 10 =").0, "14");
+        assert_eq!(run_programmer("12 xor 10 =").0, "6");
+        assert_eq!(run_programmer("byte 12 nand 10 =").0, "-9");
+        assert_eq!(run_programmer("byte 12 nor 10 =").0, "-15");
+        assert_eq!(run_programmer("bin 1010 and 1100 =").0, "1000");
+        // NOT respects the word size.
+        assert_eq!(
+            run_programmer("byte hex 0 not"),
+            ("FF".into(), "NOT(0)".into())
+        );
+        assert_eq!(
+            run_programmer("5 lsh 2 = not"),
+            ("-21".into(), "NOT(20)".into())
+        );
+    }
+
+    #[test]
+    fn programmer_precedence() {
+        // OR and XOR bind loosest, then AND, then + and −, then × ÷ % and the shifts.
+        assert_eq!(
+            run_programmer("4 or 2 + 2 ="),
+            ("4".into(), "4 OR 2 + 2 =".into())
+        );
+        assert_eq!(run_programmer("8 or 6 and 3 =").0, "10");
+        assert_eq!(run_programmer("1 + 1 lsh 3 =").0, "9");
+        assert_eq!(run_programmer("2 + 3 * 4 =").0, "14");
+        assert_eq!(run_programmer("( 1 + 2 ) * 3 =").0, "9");
+    }
+
+    #[test]
+    fn programmer_integer_division() {
+        assert_eq!(run_programmer("7 / 2 =").0, "3");
+        // The display truncates every result: 5 ÷ 2 × 2 is 4.
+        assert_eq!(run_programmer("5 / 2 * 2 =").0, "4");
+        assert_eq!(run_programmer("7 neg / 2 =").0, "-3");
+        assert_eq!(run_programmer("7 % 3 =").0, "1");
+        assert_eq!(run_programmer("7 neg % 3 =").0, "-1");
+        assert_eq!(run_programmer("7 % 3 neg =").0, "1");
+        assert_eq!(run_programmer("5 / 0 =").0, "Cannot divide by zero");
+        assert_eq!(run_programmer("0 / 0 =").0, "Result is undefined");
+        assert_eq!(run_programmer("5 % 0 =").0, "Result is undefined");
+        // Inside parentheses a quotient keeps its fraction until the parentheses
+        // close: 10 − 3.5 = 6.5, and 255 AND 6.5 is 6.
+        assert_eq!(
+            run_programmer("( 255 and 10 - 7 / 2 ) ="),
+            ("6".into(), "(255 AND 10 - 7 ÷ 2) =".into())
+        );
+    }
+
+    #[test]
+    fn programmer_shifts_and_rotations() {
+        assert_eq!(
+            run_programmer("5 lsh 2 ="),
+            ("20".into(), "5 Lsh 2 =".into())
+        );
+        assert_eq!(run_programmer("byte bin 10000000 rsh 1 =").0, "1100 0000");
+        assert_eq!(run_programmer("byte bin 10000000 rshl 1 =").0, "0100 0000");
+        assert_eq!(run_programmer("bin 101 rshl 1 =").0, "0010");
+        assert_eq!(
+            run_programmer("byte bin 10000001 rol"),
+            ("0011".into(), "RoL(10000001)".into())
+        );
+        assert_eq!(run_programmer("byte bin 10000001 ror").0, "1100 0000");
+        // A shift by the word size or more has no result.
+        assert_eq!(
+            run_programmer("1 lsh 64 ="),
+            ("Result not defined".into(), "1 Lsh".into())
+        );
+        assert_eq!(run_programmer("byte 1 lsh 8 =").0, "Result not defined");
+        // Through carry, the bit that falls out comes back in on the next rotation;
+        // C clears the carry.
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "byte hex 80 rolc");
+        assert_eq!(calc.display(), "0");
+        press_programmer(&mut calc, "rolc");
+        assert_eq!(calc.display(), "1");
+        press_programmer(&mut calc, "rorc rorc");
+        assert_eq!(calc.display(), "80");
+        press_programmer(&mut calc, "c 1 rorc rolc");
+        assert_eq!(calc.display(), "1");
+    }
+
+    #[test]
+    fn programmer_negative_numbers() {
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "5 neg");
+        assert_eq!(calc.display(), "-5");
+        assert_eq!(
+            radix_values(&calc),
+            [
+                "FFFF FFFF FFFF FFFB".to_string(),
+                "-5".into(),
+                "1 777 777 777 777 777 777 773".into(),
+                "1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1011"
+                    .into()
+            ]
+        );
+        // ± outside decimal works on the finished number.
+        assert_eq!(
+            run_programmer("hex 5 neg"),
+            ("FFFF FFFF FFFF FFFB".into(), "negate(5)".into())
+        );
+        // A typed negative number can't become a positive one that doesn't fit.
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "byte 12 neg 8 neg");
+        assert_eq!(calc.display(), "-128");
+        press_programmer(&mut calc, "+");
+        assert_eq!(calc.display(), "-128");
+    }
+
+    #[test]
+    fn programmer_radix_change_rewrites_the_expression() {
+        // The operands are written again from their unsigned values, so -5 comes
+        // back as 18446744073709551611 in decimal, as in Windows.
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "5 neg + 2");
+        assert_eq!(
+            (calc.display(), calc.expression()),
+            ("2".into(), "-5 +".into())
+        );
+        press_programmer(&mut calc, "hex");
+        assert_eq!(calc.expression(), "FFFFFFFFFFFFFFFB +");
+        press_programmer(&mut calc, "dec");
+        assert_eq!(calc.expression(), "18446744073709551611 +");
+        press_programmer(&mut calc, "=");
+        assert_eq!(calc.display(), "-3");
+        // After `=`, a new radix clears the expression line.
+        press_programmer(&mut calc, "hex");
+        assert_eq!(
+            (calc.display(), calc.expression()),
+            ("FFFF FFFF FFFF FFFD".into(), "".into())
+        );
+        // A number being typed is finished by a new radix.
+        assert_eq!(run_programmer("12 hex"), ("C".into(), "".into()));
+        assert_eq!(run_programmer("12 hex 3"), ("3".into(), "".into()));
+    }
+
+    #[test]
+    fn programmer_digit_limits() {
+        assert_eq!(
+            run_programmer("hex FFFFFFFFFFFFFFFFF").0,
+            "FFFF FFFF FFFF FFFF"
+        );
+        assert_eq!(
+            run_programmer("hex FFFFFFFFFFFFFFFF").0,
+            "FFFF FFFF FFFF FFFF"
+        );
+        assert_eq!(
+            run_programmer("9223372036854775807").0,
+            "9,223,372,036,854,775,807"
+        );
+        assert_eq!(
+            run_programmer("9223372036854775808").0,
+            "922,337,203,685,477,580"
+        );
+        assert_eq!(run_programmer("byte 255").0, "25");
+        assert_eq!(run_programmer("byte oct 777").0, "77");
+        assert_eq!(run_programmer("byte oct 377").0, "377");
+        assert_eq!(
+            run_programmer("word bin 11111111111111111").0,
+            "1111 1111 1111 1111"
+        );
+    }
+
+    #[test]
+    fn programmer_word_sizes() {
+        // A smaller word keeps the low bits; a larger one extends the sign.
+        assert_eq!(run_programmer("hex 1FFFF word").0, "FFFF");
+        assert_eq!(run_programmer("hex FF byte").0, "FF");
+        assert_eq!(run_programmer("hex FF byte word").0, "FFFF");
+        assert_eq!(run_programmer("hex 7F byte qword").0, "7F");
+        assert_eq!(run_programmer("200 byte").0, "-56");
+        assert_eq!(run_programmer("byte 100 + 100 =").0, "-56");
+    }
+
+    #[test]
+    fn programmer_bit_toggling() {
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "bit0 bit63");
+        assert_eq!(calc.display(), "-9,223,372,036,854,775,807");
+        assert_eq!(calc.bits(), 0x8000_0000_0000_0001);
+        press_programmer(&mut calc, "bit63");
+        assert_eq!(calc.display(), "1");
+        // After an operator, a bit flips the left operand, like a function.
+        assert_eq!(
+            run_programmer("5 + bit1 ="),
+            ("12".into(), "5 + 7 =".into())
+        );
+        // A typed number is finished first; bits beyond the word do nothing.
+        assert_eq!(run_programmer("5 bit3").0, "13");
+        assert_eq!(run_programmer("byte bit8").0, "0");
+    }
+
+    #[test]
+    fn programmer_keys_and_errors() {
+        let mut calc = Calculator::programmer();
+        assert!(!calc.is_enabled(Command::Digit(10)));
+        assert!(!calc.is_enabled(Command::Decimal));
+        assert!(!calc.is_enabled(Command::Function(Func::SquareRoot)));
+        press_programmer(&mut calc, "hex");
+        assert!(calc.is_enabled(Command::Digit(15)));
+        press_programmer(&mut calc, "bin");
+        assert!(!calc.is_enabled(Command::Digit(2)));
+        assert!(calc.is_enabled(Command::Digit(1)));
+        // In the error state `=` and the radix list stay enabled, the operators don't.
+        press_programmer(&mut calc, "dec 1 / 0 =");
+        assert!(calc.has_error());
+        assert!(calc.radix_values().unwrap().iter().all(String::is_empty));
+        assert!(calc.is_enabled(Command::Equals));
+        assert!(!calc.is_enabled(Command::Operator(Op::And)));
+        assert!(!calc.is_enabled(Command::WordSize(WordSize::Byte)));
+        press_programmer(&mut calc, "=");
+        assert_eq!((calc.display(), calc.has_error()), ("0".into(), false));
+        press_programmer(&mut calc, "1 / 0 = hex");
+        assert_eq!(
+            (calc.display(), calc.radix()),
+            ("0".into(), Some(Radix::Hex))
+        );
+        // The Standard mode has none of these keys.
+        let standard = Calculator::default();
+        assert!(!standard.is_enabled(Command::Operator(Op::And)));
+        assert!(!standard.is_enabled(Command::Digit(10)));
+        assert!(!standard.is_enabled(Command::Radix(Radix::Hex)));
+    }
+
+    #[test]
+    fn programmer_clear_or_clear_entry() {
+        // The keypad shows C when nothing has been typed and the display is 0.
+        let mut calc = Calculator::programmer();
+        assert!(calc.is_input_empty());
+        press_programmer(&mut calc, "0");
+        assert!(calc.is_input_empty());
+        press_programmer(&mut calc, "5");
+        assert!(!calc.is_input_empty());
+        press_programmer(&mut calc, "+");
+        assert!(!calc.is_input_empty());
+        press_programmer(&mut calc, "ce");
+        assert!(calc.is_input_empty());
+    }
+
+    #[test]
+    fn programmer_memory_and_history() {
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "byte 1 neg");
+        calc.execute(Command::MemoryStore);
+        assert_eq!(calc.memory()[0], Number::from_integer(255.into()));
+        assert_eq!(calc.format_value(&calc.memory()[0]), "-1");
+        calc.execute(Command::MemoryAdd);
+        assert_eq!(calc.format_value(&calc.memory()[0]), "-2");
+        press_programmer(&mut calc, "hex");
+        assert_eq!(calc.format_value(&calc.memory()[0]), "FE");
+        // The Programmer mode keeps no history.
+        press_programmer(&mut calc, "1 + 2 =");
+        assert!(calc.history().is_empty());
+    }
+
+    #[test]
+    fn programmer_reset() {
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "word hex 5 +");
+        calc.execute(Command::MemoryStore);
+        calc.reset();
+        assert_eq!((calc.display(), calc.expression()), ("0".into(), "".into()));
+        assert_eq!(calc.radix(), Some(Radix::Decimal));
+        assert_eq!(calc.word_size(), Some(WordSize::Word));
+        assert_eq!(calc.memory().len(), 1);
+    }
+
+    #[test]
+    fn programmer_paste() {
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "hex");
+        assert!(calc.paste("0x1F + 1 ="));
+        assert_eq!(
+            (calc.display(), calc.expression()),
+            ("20".into(), "1F + 1 =".into())
+        );
+        assert!(calc.paste("ffh"));
+        assert_eq!(calc.display(), "FF");
+        assert!(calc.paste("A % 3 ="));
+        assert_eq!(calc.display(), "1");
+        assert!(!calc.paste("12.5"));
+        assert_eq!(calc.display(), "Invalid input");
+
+        let mut calc = Calculator::programmer();
+        assert!(calc.paste("-5"));
+        assert_eq!(calc.display(), "-5");
+        assert!(calc.paste("1_000"));
+        assert_eq!(calc.display(), "1,000");
+        assert!(!calc.paste("FF"));
+        assert!(!calc.paste("9223372036854775808"));
+        assert!(calc.paste("-9223372036854775808"));
+        assert_eq!(calc.display(), "-9,223,372,036,854,775,808");
+
+        let mut calc = Calculator::programmer();
+        press_programmer(&mut calc, "bin");
+        assert!(calc.paste("0b1010"));
+        assert_eq!(calc.display(), "1010");
+        assert!(calc.copy_text().is_some_and(|text| text == "1010"));
+        press_programmer(&mut calc, "c 111111111");
+        assert_eq!(calc.copy_text().as_deref(), Some("000111111111"));
     }
 }
