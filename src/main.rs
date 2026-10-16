@@ -11,7 +11,7 @@ use eframe::egui;
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Calculator")
+            .with_title("CalcCraft")
             .with_inner_size([320.0, 500.0])
             .with_min_inner_size([280.0, 360.0])
             .with_icon(app::window_icon()),
