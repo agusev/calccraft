@@ -12,22 +12,12 @@ use eframe::egui::{
 use super::{
     CalculatorApp, Flyout, ICON_CALENDAR, ICON_CHEVRON_DOWN, RADIUS, access,
     palette::Palette,
-    radio_button, semibold,
+    radio_button,
+    region::{self, formats},
+    semibold,
     strings::{tr, tr_format},
 };
 use crate::dates::{self, MAX_DATE, MAX_OFFSET, MIN_DATE};
-
-/// The words of the "Difference" result in the interface's language.
-fn words() -> dates::Words<'static> {
-    dates::Words {
-        same_dates: tr("Date_SameDates"),
-        year: [tr("Date_Year"), tr("Date_Years")],
-        month: [tr("Date_Month"), tr("Date_Months")],
-        week: [tr("Date_Week"), tr("Date_Weeks")],
-        day: [tr("Date_Day"), tr("Date_Days")],
-        separator: dates::ENGLISH.separator,
-    }
-}
 
 // Glyphs from the Segoe Fluent Icons font.
 const ICON_CARET_UP: char = '\u{EDDB}';
@@ -47,11 +37,6 @@ const WEEKDAY_ROW_HEIGHT: f32 = 38.0;
 const CALENDAR_ROW_HEIGHT: f32 = 41.0;
 /// How far the mouse wheel has to move to flip one calendar page.
 const WHEEL_STEP: f32 = 40.0;
-
-const WEEKDAYS: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
 
 /// The two pages of the mode, picked in the drop-down at the top.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,10 +172,12 @@ impl DateState {
     /// The main result line; Ctrl+C copies it.
     pub(super) fn result_text(&self) -> String {
         match self.page {
-            Page::Difference => dates::describe_difference(self.from, self.to, &words()).0,
+            Page::Difference => {
+                dates::describe_difference(self.from, self.to, &region::date_words()).0
+            }
             Page::AddSubtract => self.resulting_date().map_or_else(
                 || tr("Date_OutOfBoundMessage").to_string(),
-                dates::format_long_date,
+                |date| formats().long_date(date),
             ),
         }
     }
@@ -298,7 +285,7 @@ impl CalculatorApp {
                     tr("Date_DifferenceLabel.Text"),
                 );
                 let (result, in_days) =
-                    dates::describe_difference(self.date.from, self.date.to, &words());
+                    dates::describe_difference(self.date.from, self.date.to, &region::date_words());
                 let pos = pos2(left, content + 197.0);
                 let name = tr_format("Date_DifferenceResultAutomationName", &[&result]);
                 let bottom = paragraph(p, &painter, pos, result, result_size, wrap_width);
@@ -419,7 +406,7 @@ impl CalculatorApp {
         let p = self.palette;
         let date = self.date.date(field);
         let painter = ui.painter();
-        let text = dates::format_date(date);
+        let text = formats().date(date);
         let label = painter.layout_no_wrap(text.clone(), FontId::proportional(14.0), p.text);
         let rect = Rect::from_min_size(
             pos2(text_pos.x - 12.0, text_pos.y),
@@ -664,7 +651,7 @@ impl CalculatorApp {
             CalendarView::Decade => None,
         };
         let title = match view {
-            CalendarView::Month => shown.format("%B %Y").to_string(),
+            CalendarView::Month => formats().year_month(shown),
             CalendarView::Year => shown.year().to_string(),
             CalendarView::Decade => {
                 let start = decade_start(shown);
@@ -796,7 +783,10 @@ fn month_view(
     cells: Cells,
 ) -> Option<CalendarAction> {
     let column = body.width() / 7.0;
-    for (i, name) in WEEKDAYS.iter().enumerate() {
+    // The weekday names start at the region.s first day of the week.
+    let week_start = formats().first_day;
+    for i in 0..7 {
+        let name = &formats().weekdays[(week_start.num_days_from_sunday() as usize + i) % 7];
         let center = pos2(
             body.left() + (i as f32 + 0.5) * column,
             body.top() + 2.0 + WEEKDAY_ROW_HEIGHT / 2.0,
@@ -811,7 +801,7 @@ fn month_view(
     }
 
     let grid_top = body.top() + 2.0 + WEEKDAY_ROW_HEIGHT;
-    let page_start = dates::month_page_start(shown.year(), shown.month());
+    let page_start = dates::month_page_start(shown.year(), shown.month(), week_start);
     let mut action = None;
     for i in 0..42 {
         let day = page_start + Days::new(i);
@@ -835,7 +825,7 @@ fn month_view(
         let id = Id::new("calendar-day").with(i);
         // Screen readers get the whole date, not just the day of the month.
         let label = day.day().to_string();
-        if calendar_cell(p, ui, id, cell, &label, &dates::format_date(day), state) {
+        if calendar_cell(p, ui, id, cell, &label, &formats().date(day), state) {
             action = Some(CalendarAction::Pick(day));
         }
     }
@@ -864,8 +854,8 @@ fn year_view(
             dimmed: month.year() != shown.year(),
             focus: cells.focus && same_month(cells.selected),
         };
-        let label = MONTHS[month.month0() as usize];
-        let name = month.format("%B %Y").to_string();
+        let label = &formats().months[month.month0() as usize];
+        let name = formats().year_month(month);
         let id = Id::new("calendar-month").with(i);
         let cell = grid_cell(body, i as usize);
         if calendar_cell(p, ui, id, cell, label, &name, state) {

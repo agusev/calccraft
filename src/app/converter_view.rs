@@ -12,7 +12,7 @@ use super::date_view::{list_item, popup_frame};
 use super::strings::{tr, tr_format, unit_abbreviation, unit_name};
 use super::{
     CalculatorApp, Flyout, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, KEY_FLASH, Kind, MARGIN, RADIUS,
-    access, icons, layout_elided_left, light, negate_label, semibold, symbols, text,
+    access, icons, layout_elided_left, light, negate_label, numbers, semibold, symbols, text,
 };
 use crate::converter::{Converter, ConverterCommand, Region};
 
@@ -208,9 +208,11 @@ impl CalculatorApp {
                     };
                     self.converter_press(command, now);
                 }
-                Event::Copy => ctx.copy_text(self.converter.converter.copy_text()),
+                Event::Copy => {
+                    ctx.copy_text(numbers().localize_plain(&self.converter.converter.copy_text()))
+                }
                 Event::Paste(text) => {
-                    self.converter.converter.paste(&text);
+                    self.converter.converter.paste(&numbers().delocalize(&text));
                 }
                 _ => {}
             }
@@ -333,9 +335,9 @@ impl CalculatorApp {
         let value = if converter.has_paste_error() {
             tr("CEngine.100").to_string()
         } else if top {
-            converter.value1()
+            numbers().localize(&converter.value1())
         } else {
-            converter.value2()
+            numbers().localize(&converter.value2())
         };
         let active = converter.value1_active() == top;
         let family = if active { semibold() } else { light() };
@@ -474,8 +476,9 @@ impl CalculatorApp {
         let items: Vec<Item> = suggestions
             .iter()
             .map(|s| {
+                let shown = numbers().localize(&s.value);
                 let value =
-                    painter.layout_no_wrap(s.value.clone(), FontId::new(14.0, semibold()), p.text);
+                    painter.layout_no_wrap(shown.clone(), FontId::new(14.0, semibold()), p.text);
                 let unit = painter.layout_no_wrap(
                     unit_abbreviation(s.key).to_string(),
                     FontId::proportional(14.0),
@@ -483,7 +486,7 @@ impl CalculatorApp {
                 );
                 let name = tr_format(
                     "SupplementaryUnit_AutomationName",
-                    &[&s.value, unit_name(s.key)],
+                    &[&shown, unit_name(s.key)],
                 );
                 let texts = value.size().x + 4.0 + unit.size().x;
                 match s.glyph {

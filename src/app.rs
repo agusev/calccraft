@@ -4,6 +4,7 @@ mod access;
 mod converter_view;
 mod date_view;
 mod palette;
+mod region;
 mod strings;
 
 use std::sync::Arc;
@@ -400,11 +401,11 @@ impl CalculatorApp {
                 }
                 Event::Copy if !covered => {
                     if let Some(text) = self.calc.copy_text() {
-                        ctx.copy_text(text);
+                        ctx.copy_text(numbers().localize_plain(&text));
                     }
                 }
                 Event::Paste(text) if !covered => {
-                    self.calc.paste(&text);
+                    self.calc.paste(&numbers().delocalize(&text));
                 }
                 _ => {}
             }
@@ -682,7 +683,7 @@ impl CalculatorApp {
     fn display_text(&self) -> String {
         match self.calc.error() {
             Some(error) => tr(&format!("CEngine.{}", error.resource_id())).to_string(),
-            None => self.calc.display(),
+            None => numbers().localize(&self.calc.display()),
         }
     }
 
@@ -692,7 +693,7 @@ impl CalculatorApp {
         let right = rect.right() - 12.0;
         let max_width = rect.width() - 24.0;
 
-        let expression = self.calc.expression();
+        let expression = numbers().localize_expression(&self.calc.expression());
         if !expression.is_empty() {
             let galley =
                 layout_elided_left(painter, &expression, FontId::proportional(14.0), max_width);
@@ -706,9 +707,11 @@ impl CalculatorApp {
         // Screen readers read the display out whenever it changes ("Display is 7"),
         // and say "point" for a decimal point that has no digits after it yet.
         let display = self.display_text();
-        let name = match display.strip_suffix('.') {
-            Some(number) => tr_format("Format_CalculatorResults_Decimal", &[number]),
-            None => tr_format("Format_CalculatorResults", &[&display]),
+        let name = match display.strip_suffix(numbers().decimal.as_str()) {
+            Some(number) if !self.calc.has_error() => {
+                tr_format("Format_CalculatorResults_Decimal", &[number])
+            }
+            _ => tr_format("Format_CalculatorResults", &[&display]),
         };
         access::text(ui, rect, Id::new("display-value"), &name, true);
 
@@ -1063,7 +1066,7 @@ impl CalculatorApp {
             // Windows copies the result as the list shows it, with separators.
             Some(FlyoutAction::CopyHistory(i)) => {
                 ui.ctx()
-                    .copy_text(format_number(&self.calc.history()[i].result));
+                    .copy_text(numbers().localize(&format_number(&self.calc.history()[i].result)));
             }
             Some(FlyoutAction::DeleteHistory(i)) => self.calc.delete_history_item(i),
             Some(FlyoutAction::CloseMenu) | None => {}
@@ -1077,15 +1080,17 @@ impl CalculatorApp {
         let entry = &self.calc.history()[index];
         let width = ui.available_width();
         let painter = ui.painter().clone();
+        let entry_expression = numbers().localize_expression(&entry.expression);
+        let entry_result = numbers().localize(&format_number(&entry.result));
         let expression = layout_elided_left(
             &painter,
-            &entry.expression,
+            &entry_expression,
             FontId::proportional(14.0),
             width - 24.0,
         );
         let result = layout_elided_left(
             &painter,
-            &format_number(&entry.result),
+            &entry_result,
             FontId::new(20.0, semibold()),
             width - 24.0,
         );
@@ -1093,7 +1098,7 @@ impl CalculatorApp {
 
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         // Windows names the entry by its expression and result.
-        let name = format!("{} {}", entry.expression, format_number(&entry.result));
+        let name = format!("{entry_expression} {entry_result}");
         let id = Id::new("history-item").with(index);
         let info = access::item(WidgetType::SelectableLabel, &name, false);
         let response = access::control(ui, p, rect, id, true, RADIUS, info);
@@ -1131,7 +1136,7 @@ impl CalculatorApp {
         let p = self.palette;
         let value = &self.calc.memory()[index];
         let width = ui.available_width();
-        let shown = format_number(value);
+        let shown = numbers().localize(&format_number(value));
         let result = layout_elided_left(
             ui.painter(),
             &shown,
@@ -1952,6 +1957,12 @@ impl CalculatorApp {
 }
 
 // ------------------------------------------------------------------- text
+
+/// The user's number format. The engine and the converter write numbers the en-US way;
+/// this turns them into the region's format for the screen, and pasted text back.
+fn numbers() -> &'static crate::locale::NumberFormat {
+    &region::formats().numbers
+}
 
 fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())

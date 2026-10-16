@@ -6,6 +6,7 @@ mod converter;
 mod dates;
 mod engine;
 mod icon;
+mod locale;
 
 use eframe::egui;
 
