@@ -12,9 +12,14 @@ env:
 
 jobs:
   check:
-    name: fmt, clippy, test
-    # The app targets Windows (DWM title bar tint, Segoe fonts), so CI runs there too.
-    runs-on: windows-latest
+    name: fmt, clippy, test (${{ matrix.os }})
+    # The app targets Windows (DWM title bar tint, Segoe fonts, the share sheet), and the
+    # releases are built for Linux and macOS too, so CI checks all three.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -24,6 +29,13 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      # eframe's build dependencies on Linux (see egui's README).
+      - name: Install the Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
 
       - name: Check formatting
         run: cargo fmt --check

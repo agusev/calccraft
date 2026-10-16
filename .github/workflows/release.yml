@@ -1,6 +1,7 @@
 name: Release
 
-# Pushing a tag such as v1.0.0 builds the Windows executable and publishes it as a GitHub release.
+# Pushing a tag such as v1.0.0 builds the app for Windows, Linux and macOS (x64) and publishes
+# them as a GitHub release.
 on:
   push:
     tags:
@@ -11,49 +12,147 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  GH_REPO: ${{ github.repository }}
 
 jobs:
-  release:
-    name: Build and publish
-    runs-on: windows-latest
+  draft:
+    name: Create the draft release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Catches a forgotten version bump before anything is built.
+      - name: Check that the tag matches Cargo.toml
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml."
+            exit 1
+          fi
+
+      # A draft, so nothing is public until every platform has built and uploaded its file.
+      # A re-run keeps the draft that is already there.
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            exit 0
+          fi
+          flags=(--draft --title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
+          # Tags with a suffix, such as v1.0.0-beta.1, become pre-releases.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: draft
+    strategy:
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # GitHub's macOS runners are Apple silicon; the Intel build is cross-compiled.
+          - name: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      # Catches a forgotten version bump before anything is published.
-      - name: Check that the tag matches Cargo.toml
+      # eframe's build dependencies on Linux (see egui's README).
+      - name: Install the Linux build dependencies
+        if: runner.os == 'Linux'
         run: |
-          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
-            "::error::Tag $env:GITHUB_REF_NAME does not match version $version in Cargo.toml."
-            exit 1
-          }
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
 
-      # CI runs on the same tag in parallel, but nothing stops it from publishing a failing build.
+      # CI runs on the same tag in parallel, but nothing stops it from publishing a failing
+      # build. The macOS tests run on the runner's own (Apple silicon) build.
       - name: Test
         run: cargo test --locked
 
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
         run: |
-          $asset = "calculator-$env:GITHUB_REF_NAME-windows-x64.exe"
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/calculator.exe "dist/$asset"
-          $hash = (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower()
-          # sha256sum format with an LF ending (a CRLF breaks `sha256sum -c`).
-          Set-Content "dist/$asset.sha256" "$hash  $asset`n" -NoNewline
+          version="${GITHUB_REF_NAME#v}"
+          release="target/${{ matrix.target }}/release"
+          asset="calculator-$GITHUB_REF_NAME-${{ matrix.name }}"
+          mkdir dist
+          case "${{ matrix.name }}" in
+            windows-*)
+              asset="$asset.exe"
+              cp "$release/calculator.exe" "dist/$asset"
+              ;;
+            linux-*)
+              # A tarball keeps the executable bit.
+              asset="$asset.tar.gz"
+              tar -czf "dist/$asset" -C "$release" calculator
+              ;;
+            macos-*)
+              # An app bundle, so Finder and the Dock treat it as an app. It's signed ad hoc
+              # (not notarized), so macOS asks before opening it the first time.
+              app="dist/CalcCraft.app"
+              mkdir -p "$app/Contents/MacOS"
+              cp "$release/calculator" "$app/Contents/MacOS/calculator"
+              cat > "$app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>CalcCraft</string>
+            <key>CFBundleDisplayName</key><string>CalcCraft</string>
+            <key>CFBundleIdentifier</key><string>com.github.gavrilov.calccraft</string>
+            <key>CFBundleExecutable</key><string>calculator</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$version</string>
+            <key>CFBundleVersion</key><string>$version</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          EOF
+              codesign --force --deep --sign - "$app"
+              asset="$asset.zip"
+              ditto -c -k --keepParent "$app" "dist/$asset"
+              rm -rf "$app"
+              ;;
+          esac
+          cd dist
+          # sha256sum's format, which `sha256sum -c` and `shasum -a 256 -c` check.
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
 
-      - name: Publish the release
+      - name: Upload to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          $flags = @('--title', $env:GITHUB_REF_NAME, '--generate-notes', '--verify-tag')
-          # Tags with a suffix, such as v1.0.0-beta.1, become pre-releases.
-          if ($env:GITHUB_REF_NAME.Contains('-')) { $flags += '--prerelease' }
-          $files = (Get-ChildItem dist).FullName
-          gh release create $env:GITHUB_REF_NAME @flags @files
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

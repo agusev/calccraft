@@ -32,6 +32,7 @@ impl NumberFormat {
     /// A format from Windows' settings. Windows Settings allow separators of up to three
     /// characters, but the Windows Calculator keeps only the first one
     /// (`LocalizationSettings.Initialize`). An empty decimal separator falls back to `.`.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn new(decimal: &str, group: &str, grouping: &str) -> Self {
         let first = |text: &str| text.chars().next().map(String::from);
         Self {
@@ -96,6 +97,7 @@ impl NumberFormat {
 /// Windows' grouping string (`LOCALE_SGROUPING`) as a list, like the engine's
 /// `DigitGroupingStringToGroupingVector`: `3;0` groups every 3 digits, `3;2;0` is 3 and
 /// then every 2 (India), `3` groups only the first 3, and `0;0` doesn't group.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn parse_grouping(grouping: &str) -> Vec<u32> {
     grouping
         .split(';')
@@ -143,6 +145,7 @@ fn group_digits(digits: &str, separator: &str, grouping: &[u32]) -> String {
 /// The date pickers' pattern ("day month year", like `October 15, 2026` in en-US) from
 /// the region's long date pattern (`LOCALE_SLONGDATE`, like `dddd, MMMM d, yyyy`):
 /// the long date without the day of the week and the separators next to it.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn without_weekday(pattern: &str) -> String {
     // Find `ddd` or `dddd` outside quoted text.
     let chars: Vec<char> = pattern.chars().collect();

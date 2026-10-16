@@ -55,10 +55,10 @@ fn load(choice: Option<&str>) -> &'static Formats {
         return formats;
     }
     #[cfg(windows)]
-    let formats = windows::load(choice);
+    let formats = windows::load(choice).unwrap_or_else(Formats::english);
     #[cfg(not(windows))]
-    let formats = None;
-    let formats: &'static Formats = Box::leak(Box::new(formats.unwrap_or_else(Formats::english)));
+    let formats = Formats::english();
+    let formats: &'static Formats = Box::leak(Box::new(formats));
     loaded.push((choice.map(str::to_string), formats));
     formats
 }
