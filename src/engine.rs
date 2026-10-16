@@ -136,12 +136,23 @@ pub enum CalcError {
 }
 
 impl CalcError {
+    /// The English message; the UI shows the translation of `resource_id`.
     pub fn message(self) -> &'static str {
         match self {
             CalcError::DivideByZero => "Cannot divide by zero",
             CalcError::Undefined => "Result is undefined",
             CalcError::InvalidInput => "Invalid input",
             CalcError::Overflow => "Overflow",
+        }
+    }
+
+    /// The message's id in Windows' `CEngineStrings.resw` (`EngineStrings.h`).
+    pub fn resource_id(self) -> u16 {
+        match self {
+            CalcError::DivideByZero => 99,
+            CalcError::InvalidInput => 100,
+            CalcError::Undefined => 101,
+            CalcError::Overflow => 107,
         }
     }
 }
@@ -491,6 +502,11 @@ impl Calculator {
 
     pub fn has_error(&self) -> bool {
         self.error.is_some()
+    }
+
+    /// The error the display shows, if any.
+    pub fn error(&self) -> Option<CalcError> {
+        self.error
     }
 
     /// How many parentheses are open (the `(` counter of the Scientific mode).

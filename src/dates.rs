@@ -99,35 +99,58 @@ pub fn subtract(date: NaiveDate, years: u32, months: u32, days: u32) -> Option<N
 
 // ------------------------------------------------------------- formatting
 
+/// The words of the "Difference" result, in the interface's language. The UI takes
+/// them from the Windows Calculator's translations; `ENGLISH` is the en-US text.
+#[derive(Clone, Copy, Debug)]
+pub struct Words<'a> {
+    pub same_dates: &'a str,
+    /// Each unit's singular and plural (`Date_Year` and `Date_Years`, …).
+    pub year: [&'a str; 2],
+    pub month: [&'a str; 2],
+    pub week: [&'a str; 2],
+    pub day: [&'a str; 2],
+    /// Joins the units: Windows uses the region's list separator and a space.
+    pub separator: &'a str,
+}
+
+pub const ENGLISH: Words<'static> = Words {
+    same_dates: "Same dates",
+    year: ["year", "years"],
+    month: ["month", "months"],
+    week: ["week", "weeks"],
+    day: ["day", "days"],
+    separator: ", ",
+};
+
 /// The "Difference" result: the main line and, for 7 days or more, a second
 /// line with the total number of days.
-pub fn describe_difference(a: NaiveDate, b: NaiveDate) -> (String, Option<String>) {
+pub fn describe_difference(a: NaiveDate, b: NaiveDate, words: &Words) -> (String, Option<String>) {
     let total = days_between(a, b);
     if total == 0 {
-        return ("Same dates".to_string(), None);
+        return (words.same_dates.to_string(), None);
     }
     let diff = difference(a, b);
-    let in_days = count(total, "day", "days");
+    let in_days = count(total, words.day);
     if diff.years == 0 && diff.months == 0 && diff.weeks == 0 {
         return (in_days, None);
     }
     let parts = [
-        (diff.years, "year", "years"),
-        (diff.months, "month", "months"),
-        (diff.weeks, "week", "weeks"),
-        (diff.days, "day", "days"),
+        (diff.years, words.year),
+        (diff.months, words.month),
+        (diff.weeks, words.week),
+        (diff.days, words.day),
     ];
     let text = parts
         .iter()
-        .filter(|(value, _, _)| *value > 0)
-        .map(|&(value, one, many)| count(value, one, many))
+        .filter(|(value, _)| *value > 0)
+        .map(|&(value, unit)| count(value, unit))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(words.separator);
     (text, Some(in_days))
 }
 
-/// `1 day`, `5 days`: singular only for exactly one.
-fn count(value: u32, one: &str, many: &str) -> String {
+/// `1 day`, `5 days`: singular only for exactly one, as in Windows (no plural rules).
+fn count(value: u32, [one, many]: [&str; 2]) -> String {
     format!("{value} {}", if value == 1 { one } else { many })
 }
 
@@ -164,7 +187,7 @@ mod tests {
     }
 
     fn describe(a: &str, b: &str) -> (String, Option<String>) {
-        describe_difference(date(a), date(b))
+        describe_difference(date(a), date(b), &ENGLISH)
     }
 
     fn diff(years: u32, months: u32, weeks: u32, days: u32) -> Difference {

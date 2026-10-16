@@ -3,6 +3,7 @@
 mod converter_view;
 mod date_view;
 mod palette;
+mod strings;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +18,7 @@ use eframe::egui::{
 use crate::converter::Category;
 use crate::engine::{Calculator, Command, Func, Op, format_number};
 use palette::Palette;
+use strings::tr;
 
 // Glyphs from the Segoe Fluent Icons / Segoe MDL2 Assets fonts.
 const ICON_MENU: char = '\u{E700}';
@@ -57,6 +59,25 @@ fn category_icon(category: Category) -> char {
         Category::Pressure => '\u{EC4A}',
         Category::Angle => '\u{F461}',
     }
+}
+
+/// A converter's name, from its resource key in Windows (`NavCategory`'s
+/// `NameResourceKey` with "Text" added).
+fn category_name(category: Category) -> &'static str {
+    tr(match category {
+        Category::Volume => "CategoryName_VolumeText",
+        Category::Length => "CategoryName_LengthText",
+        Category::Weight => "CategoryName_WeightText",
+        Category::Temperature => "CategoryName_TemperatureText",
+        Category::Energy => "CategoryName_EnergyText",
+        Category::Area => "CategoryName_AreaText",
+        Category::Speed => "CategoryName_SpeedText",
+        Category::Time => "CategoryName_TimeText",
+        Category::Power => "CategoryName_PowerText",
+        Category::Data => "CategoryName_DataText",
+        Category::Pressure => "CategoryName_PressureText",
+        Category::Angle => "CategoryName_AngleText",
+    })
 }
 
 const HEADER_HEIGHT: f32 = 48.0;
@@ -112,9 +133,9 @@ impl Mode {
 
     fn title(self) -> &'static str {
         match self {
-            Mode::Standard => "Standard",
-            Mode::DateCalculation => "Date calculation",
-            Mode::Converter(category) => category.name(),
+            Mode::Standard => tr("StandardModeText"),
+            Mode::DateCalculation => tr("DateCalculationModeText"),
+            Mode::Converter(category) => category_name(category),
         }
     }
 
@@ -229,7 +250,9 @@ impl CalculatorApp {
             .and_then(|key| Theme::from_key(&key))
             .unwrap_or(Theme::System);
         cc.egui_ctx.set_theme(theme.preference());
-        let has_icons = setup_fonts(&cc.egui_ctx);
+        // Before anything looks up a string: the language is picked once.
+        let language = strings::init(&strings::preferred_languages());
+        let has_icons = setup_fonts(&cc.egui_ctx, strings::script_font(language));
         let icon = window_icon();
         let app_icon = cc.egui_ctx.load_texture(
             "app-icon",
@@ -573,6 +596,14 @@ impl CalculatorApp {
 
     // --------------------------------------------------------------- display
 
+    /// The display's text: the number, or the error message in the interface's language.
+    fn display_text(&self) -> String {
+        match self.calc.error() {
+            Some(error) => tr(&format!("CEngine.{}", error.resource_id())).to_string(),
+            None => self.calc.display(),
+        }
+    }
+
     fn draw_display(&self, ui: &Ui, rect: Rect) {
         let p = self.palette;
         let painter = ui.painter();
@@ -591,7 +622,7 @@ impl CalculatorApp {
         }
 
         // Long numbers shrink to fit the width.
-        let display = self.calc.display();
+        let display = self.display_text();
         let base_size = (rect.height() * 0.46).clamp(28.0, 72.0);
         let mut galley =
             painter.layout_no_wrap(display.clone(), FontId::new(base_size, semibold()), p.text);
@@ -786,7 +817,10 @@ impl CalculatorApp {
         let painter = ui.painter().clone();
         let top = rect.top() - 3.0;
         let mut left = rect.left();
-        for (panel, label) in [(Panel::History, "History"), (Panel::Memory, "Memory")] {
+        for (panel, label) in [
+            (Panel::History, tr("HistoryLabel.Text")),
+            (Panel::Memory, tr("MemoryLabel.Text")),
+        ] {
             let galley = painter.layout_no_wrap(
                 label.to_string(),
                 FontId::proportional(14.0),
@@ -847,9 +881,9 @@ impl CalculatorApp {
         };
         if empty {
             let message = if history {
-                "There's no history yet"
+                tr("HistoryEmpty.Text")
             } else {
-                "There's nothing saved in memory"
+                tr("MemoryPaneEmpty.Text")
             };
             painter.text(
                 rect.left_top() + empty_offset,
@@ -1053,29 +1087,29 @@ impl CalculatorApp {
             MenuTarget::History(i) => vec![
                 (
                     self.icon(ICON_COPY, "⧉", 16.0),
-                    "Copy",
+                    tr("CopyHistoryMenuItem.Text"),
                     FlyoutAction::CopyHistory(i),
                 ),
                 (
                     self.icon(ICON_DELETE, "🗑", 16.0),
-                    "Delete",
+                    tr("DeleteHistoryMenuItem.Text"),
                     FlyoutAction::DeleteHistory(i),
                 ),
             ],
             MenuTarget::Memory(i) => vec![
                 (
                     text("MC", 11.0, semibold()),
-                    "Clear memory item",
+                    tr("ClearMemoryMenuItem.Text"),
                     FlyoutAction::MemoryClear(i),
                 ),
                 (
                     text("M+", 11.0, semibold()),
-                    "Add to memory item",
+                    tr("MemPlusMenuItem.Text"),
                     FlyoutAction::MemoryAdd(i, false),
                 ),
                 (
                     text("M−", 11.0, semibold()),
-                    "Subtract from memory item",
+                    tr("MemMinusMenuItem.Text"),
                     FlyoutAction::MemoryAdd(i, true),
                 ),
             ],
@@ -1177,8 +1211,11 @@ impl CalculatorApp {
             pos2(panel.right(), panel.bottom() - 58.0),
         );
         let groups = [
-            ("Calculator", Mode::CALCULATORS.to_vec()),
-            ("Converter", Category::ALL.map(Mode::Converter).to_vec()),
+            (tr("CalculatorModeTextCaps"), Mode::CALCULATORS.to_vec()),
+            (
+                tr("ConverterModeTextCaps"),
+                Category::ALL.map(Mode::Converter).to_vec(),
+            ),
         ];
         let mut chosen = None;
         ui.scope_builder(UiBuilder::new().max_rect(list), |ui| {
@@ -1232,7 +1269,14 @@ impl CalculatorApp {
             Stroke::new(1.0, p.flyout_border),
         );
         let icon = self.icon(ICON_SETTINGS, "⚙", 16.0);
-        let settings = self.nav_item(ui, item, Id::new("nav-settings"), icon, "Settings", false);
+        let settings = self.nav_item(
+            ui,
+            item,
+            Id::new("nav-settings"),
+            icon,
+            tr("SettingsHeader.Text"),
+            false,
+        );
 
         if settings {
             self.page = Page::Settings;
@@ -1310,7 +1354,7 @@ impl CalculatorApp {
         ui.painter().text(
             pos2(header.left() + 48.0, header.center().y),
             Align2::LEFT_CENTER,
-            "Settings",
+            tr("SettingsHeader.Text"),
             FontId::new(20.0, semibold()),
             p.text,
         );
@@ -1343,10 +1387,11 @@ impl CalculatorApp {
         const ICON_X: f32 = 28.0;
         const TEXT_X: f32 = 58.0;
         const OPTION_HEIGHT: f32 = 40.0;
+        // The themes and their labels' resource keys.
         const THEMES: [(Theme, &str); 3] = [
-            (Theme::Light, "Light"),
-            (Theme::Dark, "Dark"),
-            (Theme::System, "Use system setting"),
+            (Theme::Light, "LightThemeRadioButton.Content"),
+            (Theme::Dark, "DarkThemeRadioButton.Content"),
+            (Theme::System, "SystemThemeRadioButton.Content"),
         ];
 
         let width = ui.available_width();
@@ -1355,9 +1400,14 @@ impl CalculatorApp {
 
         // Lay out the text that wraps first: the page height depends on it.
         let text_width = width - 2.0 * SIDE - TEXT_X - 40.0;
-        let title = painter.layout("App theme".into(), body.clone(), p.text, text_width);
+        let title = painter.layout(
+            tr("AppThemeExpander.Header").into(),
+            body.clone(),
+            p.text,
+            text_width,
+        );
         let subtitle = painter.layout(
-            "Select which app theme to display".into(),
+            tr("AppThemeExpander.Description").into(),
             FontId::proportional(12.0),
             p.text_secondary,
             text_width,
@@ -1396,7 +1446,12 @@ impl CalculatorApp {
         let mut action = None;
 
         // Appearance: the App theme card expands to show the three choices.
-        section_label(p, &painter, pos2(left, top + appearance_y), "Appearance");
+        section_label(
+            p,
+            &painter,
+            pos2(left, top + appearance_y),
+            tr("SettingsAppearance.Text"),
+        );
         let card = Rect::from_x_y_ranges(left..=right, top + theme_top..=top + theme_bottom);
         let header = card.with_max_y(card.top() + header_height);
         let response = ui.interact(header, Id::new("theme-card"), Sense::CLICK);
@@ -1459,14 +1514,14 @@ impl CalculatorApp {
                 header.bottom(),
                 Stroke::new(1.0, p.card_border),
             );
-            for (i, (theme, label)) in THEMES.into_iter().enumerate() {
+            for (i, (theme, key)) in THEMES.into_iter().enumerate() {
                 let y = header.bottom() + MARGIN + (i as f32 + 0.5) * OPTION_HEIGHT;
                 let id = Id::new("theme").with(i);
                 if radio_button(
                     p,
                     ui,
                     pos2(card.left() + TEXT_X, y),
-                    label,
+                    tr(key),
                     self.theme == theme,
                     id,
                 ) {
@@ -1476,7 +1531,12 @@ impl CalculatorApp {
         }
 
         // About: the app's name, icon and version
-        section_label(p, &painter, pos2(left, top + about_y), "About");
+        section_label(
+            p,
+            &painter,
+            pos2(left, top + about_y),
+            tr("AboutGroupTitle.Text"),
+        );
         let card = Rect::from_x_y_ranges(
             left..=right,
             top + about_top..=top + about_top + CARD_HEIGHT,
@@ -1510,7 +1570,13 @@ impl CalculatorApp {
         );
 
         let feedback = pos2(left, top + feedback_y);
-        if link_button(p, ui, feedback, "Send feedback", Id::new("feedback")) {
+        if link_button(
+            p,
+            ui,
+            feedback,
+            tr("FeedbackButton.Content"),
+            Id::new("feedback"),
+        ) {
             action = Some(SettingsAction::OpenUrl(FEEDBACK_URL));
         }
 
@@ -1925,9 +1991,10 @@ fn char_command(c: char) -> Option<Command> {
     })
 }
 
-/// Loads Windows fonts: Segoe UI, Segoe UI Semibold and the icon font.
-/// Returns `true` if the icon font was found.
-fn setup_fonts(ctx: &Context) -> bool {
+/// Loads Windows fonts: Segoe UI, Segoe UI Semibold and the icon font, and the font for
+/// the script of the interface's language where Segoe UI doesn't have it (a file in the
+/// Fonts folder and its index in a collection). Returns `true` if the icon font was found.
+fn setup_fonts(ctx: &Context, script_font: Option<(&str, u32)>) -> bool {
     let dir =
         std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))
             .join("Fonts");
@@ -1948,10 +2015,22 @@ fn setup_fonts(ctx: &Context) -> bool {
         .or_else(|| load("segmdl2.ttf"))
         .map(|d| add("icons", d));
     let has_icons = icon_font.is_some();
+    let script = script_font.and_then(|(file, index)| {
+        let data = load(file)?;
+        let mut font = egui::FontData::from_owned(data);
+        font.index = index;
+        fonts.font_data.insert("script".to_owned(), Arc::new(font));
+        Some("script".to_owned())
+    });
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     if let Some(name) = regular {
         proportional.insert(0, name);
+    }
+    // Right after Segoe UI, so the script's characters come from it and not from egui's
+    // own fallback fonts.
+    if let Some(name) = script {
+        proportional.insert(1.min(proportional.len()), name);
     }
     let fallback = proportional.clone();
     let family =

@@ -9,6 +9,7 @@ use eframe::egui::{
 };
 
 use super::date_view::{list_item, popup_frame};
+use super::strings::{tr, unit_abbreviation, unit_name};
 use super::{
     CalculatorApp, Flyout, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, KEY_FLASH, Kind, MARGIN, icons,
     layout_elided_left, light, negate_label, semibold, symbols, text,
@@ -291,7 +292,9 @@ impl CalculatorApp {
     fn draw_value(&mut self, ui: &Ui, rect: Rect, top: bool, max_font: f32, margin: f32) {
         let p = self.palette;
         let converter = &self.converter.converter;
-        let value = if top {
+        let value = if converter.has_paste_error() {
+            tr("CEngine.100").to_string()
+        } else if top {
             converter.value1()
         } else {
             converter.value2()
@@ -332,7 +335,7 @@ impl CalculatorApp {
         } else {
             converter.unit2()
         };
-        let name = converter.units()[index].name;
+        let name = unit_name(converter.units()[index].key);
         let painter = ui.painter();
         let label = painter.layout_no_wrap(name.to_string(), FontId::proportional(14.0), p.text);
         let chevron = painter.layout_job(if self.has_icons {
@@ -387,7 +390,7 @@ impl CalculatorApp {
         }
         let painter = ui.painter();
         let caption = painter.layout_no_wrap(
-            "About equal to".to_string(),
+            tr("SupplementaryResultsHeader.Text").to_string(),
             FontId::proportional(12.0),
             p.text_secondary,
         );
@@ -406,7 +409,7 @@ impl CalculatorApp {
                 let value =
                     painter.layout_no_wrap(s.value.clone(), FontId::new(14.0, semibold()), p.text);
                 let unit = painter.layout_no_wrap(
-                    s.abbreviation.to_string(),
+                    unit_abbreviation(s.key).to_string(),
                     FontId::proportional(14.0),
                     p.text_secondary,
                 );
@@ -496,7 +499,11 @@ impl CalculatorApp {
             .iter()
             .map(|unit| {
                 ui.painter()
-                    .layout_no_wrap(unit.name.to_string(), FontId::proportional(14.0), p.text)
+                    .layout_no_wrap(
+                        unit_name(unit.key).to_string(),
+                        FontId::proportional(14.0),
+                        p.text,
+                    )
                     .size()
                     .x
             })
@@ -540,7 +547,14 @@ impl CalculatorApp {
                     let (row, _) = ui.allocate_exact_size(size, Sense::hover());
                     let item = row.shrink2(vec2(0.0, 2.0));
                     let id = Id::new("converter-unit-item").with(index);
-                    if list_item(p, ui, id, item, units[index].name, index == selected) {
+                    if list_item(
+                        p,
+                        ui,
+                        id,
+                        item,
+                        unit_name(units[index].key),
+                        index == selected,
+                    ) {
                         chosen = Some(index);
                     }
                 }

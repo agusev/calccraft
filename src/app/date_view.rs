@@ -10,9 +10,21 @@ use eframe::egui::{
 
 use super::{
     CalculatorApp, Flyout, ICON_CALENDAR, ICON_CHEVRON_DOWN, RADIUS, palette::Palette,
-    radio_button, semibold,
+    radio_button, semibold, strings::tr,
 };
 use crate::dates::{self, MAX_DATE, MAX_OFFSET, MIN_DATE};
+
+/// The words of the "Difference" result in the interface's language.
+fn words() -> dates::Words<'static> {
+    dates::Words {
+        same_dates: tr("Date_SameDates"),
+        year: [tr("Date_Year"), tr("Date_Years")],
+        month: [tr("Date_Month"), tr("Date_Months")],
+        week: [tr("Date_Week"), tr("Date_Weeks")],
+        day: [tr("Date_Day"), tr("Date_Days")],
+        separator: dates::ENGLISH.separator,
+    }
+}
 
 // Glyphs from the Segoe Fluent Icons font.
 const ICON_CARET_UP: char = '\u{EDDB}';
@@ -50,8 +62,8 @@ impl Page {
 
     fn title(self) -> &'static str {
         match self {
-            Page::Difference => "Difference between dates",
-            Page::AddSubtract => "Add or subtract days",
+            Page::Difference => tr("Date_DifferenceOption.Content"),
+            Page::AddSubtract => tr("Date_AddSubtractOption.Content"),
         }
     }
 }
@@ -76,9 +88,9 @@ impl Offset {
 
     fn label(self) -> &'static str {
         match self {
-            Offset::Years => "Years",
-            Offset::Months => "Months",
-            Offset::Days => "Days",
+            Offset::Years => tr("YearsLabel.Text"),
+            Offset::Months => tr("MonthsLabel.Text"),
+            Offset::Days => tr("DaysLabel.Text"),
         }
     }
 }
@@ -157,10 +169,11 @@ impl DateState {
     /// The main result line; Ctrl+C copies it.
     pub(super) fn result_text(&self) -> String {
         match self.page {
-            Page::Difference => dates::describe_difference(self.from, self.to).0,
-            Page::AddSubtract => self
-                .resulting_date()
-                .map_or_else(|| "Date out of Bound".to_string(), dates::format_long_date),
+            Page::Difference => dates::describe_difference(self.from, self.to, &words()).0,
+            Page::AddSubtract => self.resulting_date().map_or_else(
+                || tr("Date_OutOfBoundMessage").to_string(),
+                dates::format_long_date,
+            ),
         }
     }
 
@@ -246,12 +259,28 @@ impl CalculatorApp {
 
         match self.date.page {
             Page::Difference => {
-                caption(p, &painter, pos2(left, content + 17.0), "From");
+                caption(
+                    p,
+                    &painter,
+                    pos2(left, content + 17.0),
+                    tr("DateDiff_FromHeader.Header"),
+                );
                 self.draw_date_picker(ui, DateField::From, pos2(left, content + 41.0));
-                caption(p, &painter, pos2(left, content + 97.0), "To");
+                caption(
+                    p,
+                    &painter,
+                    pos2(left, content + 97.0),
+                    tr("DateDiff_ToHeader.Header"),
+                );
                 self.draw_date_picker(ui, DateField::To, pos2(left, content + 121.0));
-                caption(p, &painter, pos2(left, content + 177.0), "Difference");
-                let (result, in_days) = dates::describe_difference(self.date.from, self.date.to);
+                caption(
+                    p,
+                    &painter,
+                    pos2(left, content + 177.0),
+                    tr("Date_DifferenceLabel.Text"),
+                );
+                let (result, in_days) =
+                    dates::describe_difference(self.date.from, self.date.to, &words());
                 let pos = pos2(left, content + 197.0);
                 let bottom = paragraph(p, &painter, pos, result, result_size, wrap_width);
                 if let Some(in_days) = in_days {
@@ -259,23 +288,43 @@ impl CalculatorApp {
                 }
             }
             Page::AddSubtract => {
-                caption(p, &painter, pos2(left, content + 17.0), "From");
+                caption(
+                    p,
+                    &painter,
+                    pos2(left, content + 17.0),
+                    tr("AddSubtract_Date_FromHeader.Header"),
+                );
                 self.draw_date_picker(ui, DateField::Start, pos2(left, content + 41.0));
 
                 // Radio buttons are at least 80 wide, with 20 between them (DateCalculator.xaml).
                 let radios = content + 96.0;
                 let center_y = radios + CONTROL_HEIGHT / 2.0;
                 let subtract = self.date.subtract;
-                let add_label =
-                    painter.layout_no_wrap("Add".into(), FontId::proportional(14.0), p.text);
+                let add_label = painter.layout_no_wrap(
+                    tr("AddOption.Content").into(),
+                    FontId::proportional(14.0),
+                    p.text,
+                );
                 let subtract_x = left + (28.0 + add_label.size().x).max(80.0) + 20.0;
                 let add_id = Id::new("date-add");
-                let add_clicked =
-                    radio_button(p, ui, pos2(left, center_y), "Add", !subtract, add_id);
+                let add_clicked = radio_button(
+                    p,
+                    ui,
+                    pos2(left, center_y),
+                    tr("AddOption.Content"),
+                    !subtract,
+                    add_id,
+                );
                 let subtract_id = Id::new("date-subtract");
                 let subtract_pos = pos2(subtract_x, center_y);
-                let subtract_clicked =
-                    radio_button(p, ui, subtract_pos, "Subtract", subtract, subtract_id);
+                let subtract_clicked = radio_button(
+                    p,
+                    ui,
+                    subtract_pos,
+                    tr("SubtractOption.Content"),
+                    subtract,
+                    subtract_id,
+                );
                 if add_clicked {
                     self.date.subtract = false;
                 }
@@ -295,7 +344,7 @@ impl CalculatorApp {
                 }
 
                 let date_label = labels + 22.0 + CONTROL_HEIGHT + 35.0;
-                caption(p, &painter, pos2(left, date_label), "Date");
+                caption(p, &painter, pos2(left, date_label), tr("DateLabel.Text"));
                 let pos = pos2(left, date_label + 20.0);
                 paragraph(
                     p,
