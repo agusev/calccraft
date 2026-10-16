@@ -49,7 +49,7 @@ own `NOT_STARTED` entry.
 | **Phase 8: Application Shell, UX & Accessibility** | 10 | 5 | 0 | 0 | 5 |
 | **TOTAL** | **64** | **37** | **0** | **0** | **27** |
 
-*Last updated: 2026-10-15 (CalcCraft 0.1.2)*
+*Last updated: 2026-10-15 (CalcCraft 0.2.0)*
 
 ---
 
