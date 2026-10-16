@@ -2072,11 +2072,16 @@ impl CalculatorApp {
             ),
         ];
         let link_text = "GitHub";
-        let prefix = "To learn how you can contribute to CalcCraft, check out the project on ";
+        // Windows' own sentence (`AboutControlContribute`) names the Windows Calculator, so
+        // CalcCraft has its own, with the link at `%1`.
+        let contribute_text = tr("CalcCraft.Contribute");
+        let (prefix, suffix) = contribute_text
+            .split_once("%1")
+            .unwrap_or((contribute_text, ""));
         let paragraph = |link_color: Color32| {
             let mut job = LayoutJob::default();
             job.wrap.max_width = width - 2.0 * SIDE;
-            for (part, color) in [(prefix, p.text), (link_text, link_color), (".", p.text)] {
+            for (part, color) in [(prefix, p.text), (link_text, link_color), (suffix, p.text)] {
                 job.append(part, 0.0, TextFormat::simple(body.clone(), color));
             }
             painter.layout_job(job)
