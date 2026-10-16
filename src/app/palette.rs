@@ -93,7 +93,99 @@ pub(super) struct Palette {
     /// `FocusStrokeColorInner`), drawn over the page.
     pub focus_outer: Color32,
     pub focus_inner: Color32,
+    /// The Graphing mode's button panels over the graph (`GraphControlCommandPanel`):
+    /// #303030 without a border in dark, `SolidBackgroundFillColorBase` with
+    /// `CardStrokeColorDefaultSolid` in light, and their icons.
+    pub graph_panel: Color32,
+    pub graph_panel_border: Color32,
+    pub graph_panel_text: Color32,
+    /// An equation with an error: its box's border and fill (`EquationBoxErrorBorderBrush`
+    /// and `EquationBoxErrorBackgroundBrush`), and the error icon
+    /// (`SystemFillColorCritical`).
+    pub error_border: Color32,
+    pub error_fill: Color32,
+    pub critical: Color32,
+    /// A hidden equation's button and the empty last one's
+    /// (`EquationButtonHideLineBackgroundBrush`, white or black at 40 %), and its text.
+    pub hidden_equation: Color32,
+    pub hidden_equation_text: Color32,
+    /// The variable sliders: the rail (`ControlStrongFillColorDefault`), the thumb
+    /// (`ControlSolidFillColorDefault`) and its border, and the line under the value boxes.
+    pub slider_rail: Color32,
+    pub slider_thumb: Color32,
+    pub slider_thumb_border: Color32,
+    pub value_underline: Color32,
+    /// The track of the switch between the graph and the equations (`SwitchToggleBackground`:
+    /// black at 25 % in dark, white at 38 % in light).
+    pub switch_track: Color32,
+    /// The dimmed window behind a dialog (`SmokeFillColorDefault`: black at 30 %).
+    pub smoke: Color32,
 }
+
+/// The colors of the graph itself, which follow the "Graph theme" setting (always light by
+/// default) rather than the app theme: `GraphingCalculator.xaml`'s graph theme colors, and
+/// the `EquationBrush1`–`14` of that theme for the equations.
+pub(super) struct GraphPalette {
+    pub background: Color32,
+    pub axes: Color32,
+    /// The labeled grid lines; the others are this at half opacity (#E3E3E3 in light).
+    pub grid: Color32,
+    pub minor_grid: Color32,
+    pub equations: [Color32; 14],
+}
+
+const fn rgb(v: u32) -> Color32 {
+    Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+const GRAPH_LIGHT_BACKGROUND: Color32 = Color32::WHITE;
+const GRAPH_DARK_BACKGROUND: Color32 = rgb(0x1F1F1F);
+
+pub(super) const LIGHT_GRAPH: GraphPalette = GraphPalette {
+    background: GRAPH_LIGHT_BACKGROUND,
+    axes: Color32::BLACK,
+    grid: rgb(0xC6C6C6),
+    minor_grid: over(GRAPH_LIGHT_BACKGROUND, rgb(0xC6C6C6), 0.5),
+    equations: [
+        rgb(0x0063B1),
+        rgb(0x00B7C3),
+        rgb(0x6600CC),
+        rgb(0x107C10),
+        rgb(0x00CC6A),
+        rgb(0x008055),
+        rgb(0x58595B),
+        rgb(0xE81123),
+        rgb(0xE3008C),
+        rgb(0xB31564),
+        rgb(0xFFB900),
+        rgb(0xF7630C),
+        rgb(0x8E562E),
+        rgb(0x000000),
+    ],
+};
+
+pub(super) const DARK_GRAPH: GraphPalette = GraphPalette {
+    background: GRAPH_DARK_BACKGROUND,
+    axes: Color32::WHITE,
+    grid: rgb(0x4F4F4F),
+    minor_grid: over(GRAPH_DARK_BACKGROUND, rgb(0x4F4F4F), 0.5),
+    equations: [
+        rgb(0x4D92C8),
+        rgb(0x4DCDD5),
+        rgb(0xA366E0),
+        rgb(0x58A358),
+        rgb(0x4DDB97),
+        rgb(0x4DA688),
+        rgb(0x8A8B8C),
+        rgb(0xEF5865),
+        rgb(0xEB4DAF),
+        rgb(0xCA5B93),
+        rgb(0xFFCE4D),
+        rgb(0xF99255),
+        rgb(0xB0896D),
+        rgb(0xFFFFFF),
+    ],
+};
 
 /// `color` at `opacity` over `base`, as an opaque color.
 const fn over(base: Color32, color: Color32, opacity: f32) -> Color32 {
@@ -194,6 +286,20 @@ pub(super) const DARK: Palette = Palette {
     bit_disabled: white(DARK_BACKGROUND, 0.2),
     focus_outer: Color32::WHITE,
     focus_inner: Color32::from_black_alpha(0xB3),
+    graph_panel: rgb(0x303030),
+    graph_panel_border: rgb(0x303030),
+    graph_panel_text: Color32::WHITE,
+    error_border: rgb(0xEB5757),
+    error_fill: over(white(DARK_BACKGROUND, 0.059), rgb(0xEB5757), 0.2),
+    critical: rgb(0xFF99A4),
+    hidden_equation: white(DARK_BACKGROUND, 0.4),
+    hidden_equation_text: white(white(DARK_BACKGROUND, 0.4), 0.6),
+    slider_rail: white(DARK_BACKGROUND, 0.545),
+    slider_thumb: rgb(0x454545),
+    slider_thumb_border: white(DARK_BACKGROUND, 0.094),
+    value_underline: white(DARK_BACKGROUND, 0.314),
+    switch_track: black(DARK_BACKGROUND, 0.25),
+    smoke: Color32::from_black_alpha(0x4D),
 };
 
 pub(super) const LIGHT: Palette = Palette {
@@ -263,6 +369,20 @@ pub(super) const LIGHT: Palette = Palette {
     focus_outer: Color32::from_black_alpha(0xE4),
     // White at 70 %, premultiplied.
     focus_inner: Color32::from_rgba_premultiplied(0xB3, 0xB3, 0xB3, 0xB3),
+    graph_panel: rgb(0xF3F3F3),
+    graph_panel_border: rgb(0xEBEBEB),
+    graph_panel_text: Color32::BLACK,
+    error_border: rgb(0xEB5757),
+    error_fill: over(white(LIGHT_BACKGROUND, 0.7), rgb(0xEB5757), 0.2),
+    critical: rgb(0xC42B1C),
+    hidden_equation: black(LIGHT_BACKGROUND, 0.4),
+    hidden_equation_text: Color32::WHITE,
+    slider_rail: black(LIGHT_BACKGROUND, 0.447),
+    slider_thumb: Color32::WHITE,
+    slider_thumb_border: black(LIGHT_BACKGROUND, 0.0578),
+    value_underline: black(LIGHT_BACKGROUND, 0.2169),
+    switch_track: white(LIGHT_BACKGROUND, 0.376),
+    smoke: Color32::from_black_alpha(0x4D),
 };
 
 #[cfg(test)]

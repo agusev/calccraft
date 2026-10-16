@@ -5,6 +5,7 @@ mod app;
 mod converter;
 mod dates;
 mod engine;
+mod graphing;
 mod icon;
 mod locale;
 

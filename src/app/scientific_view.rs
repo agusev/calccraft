@@ -40,25 +40,25 @@ const LARGE_KEYPAD: (f32, f32) = (878.0, 851.0);
 
 /// The font sizes and the menu row of one of the keypad's size states.
 #[derive(Clone, Copy)]
-struct Sizes {
+pub(super) struct Sizes {
     /// Digits (`NumericButtonStyle18`, 24 and 38).
-    digit: f32,
+    pub(super) digit: f32,
     /// Most keys (`CalcOperatorCaptionSize` and its larger variants).
-    operator: f32,
-    negate: f32,
+    pub(super) operator: f32,
+    pub(super) negate: f32,
     /// The trigonometric functions and `hyp` in their menu (`CalcOperatorCaptionSizeSmall`).
-    trig: f32,
+    pub(super) trig: f32,
     /// The Function menu's symbols (`CalcOperatorTextIconCaptionSize`).
-    text_icon: f32,
+    pub(super) text_icon: f32,
     /// The menu row: its height, text, icon and chevron (`OperatorPanelButton*Style`).
-    menu: [f32; 4],
+    pub(super) menu: [f32; 4],
     /// The menus' least sizes (`TrigGrid`, `FuncGrid`).
-    trig_menu: (f32, f32),
-    function_menu: (f32, f32),
+    pub(super) trig_menu: (f32, f32),
+    pub(super) function_menu: (f32, f32),
 }
 
 impl Sizes {
-    fn for_keypad(keypad: Rect) -> Self {
+    pub(super) fn for_keypad(keypad: Rect) -> Self {
         let at_least = |(w, h): (f32, f32)| keypad.width() >= w && keypad.height() >= h;
         if at_least(LARGE_KEYPAD) {
             Sizes {
@@ -598,7 +598,7 @@ impl CalculatorApp {
     /// Trigonometry menu): an operator key, filled with the accent color while it's on.
     /// Returns whether it was clicked.
     #[allow(clippy::too_many_arguments)]
-    fn toggle(
+    pub(super) fn toggle(
         &self,
         ui: &Ui,
         rect: Rect,
@@ -800,7 +800,7 @@ impl CalculatorApp {
 // ------------------------------------------------------------------ labels
 
 /// A label of pieces, each upright or in italics (the variables).
-fn formula(pieces: &[(&str, bool)], size: f32) -> LayoutJob {
+pub(super) fn formula(pieces: &[(&str, bool)], size: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     for &(piece, italics) in pieces {
         job.append(
@@ -815,13 +815,13 @@ fn formula(pieces: &[(&str, bool)], size: f32) -> LayoutJob {
     job
 }
 
-fn italic(s: &str, size: f32) -> LayoutJob {
+pub(super) fn italic(s: &str, size: f32) -> LayoutJob {
     formula(&[(s, true)], size)
 }
 
 /// `job` followed by a raised, smaller italic `letter`: the exponent of `xʸ` and `10ˣ`,
 /// or the index of `ʸ√x`. Unicode's modifier letters (ʸ, ˣ) are too small in Segoe UI.
-fn superscript(mut job: LayoutJob, letter: &str, size: f32) -> LayoutJob {
+pub(super) fn superscript(mut job: LayoutJob, letter: &str, size: f32) -> LayoutJob {
     job.append(
         letter,
         0.0,
@@ -835,12 +835,12 @@ fn superscript(mut job: LayoutJob, letter: &str, size: f32) -> LayoutJob {
 }
 
 /// `2ⁿᵈ`.
-fn second_label(size: f32) -> LayoutJob {
+pub(super) fn second_label(size: f32) -> LayoutJob {
     text("2ⁿᵈ", size, FontFamily::Proportional)
 }
 
 /// `logᵧx`, with a lowered small y (Unicode has no subscript y).
-fn log_base_label(size: f32) -> LayoutJob {
+pub(super) fn log_base_label(size: f32) -> LayoutJob {
     let mut job = text("log", size, FontFamily::Proportional);
     job.append(
         "y",
@@ -863,7 +863,7 @@ fn log_base_label(size: f32) -> LayoutJob {
 }
 
 /// A label with brackets from Segoe UI Symbol, which Segoe UI lacks: `⌊x⌋`, `⌈x⌉`, `∛x`.
-fn symbol_formula(before: &str, after: &str, size: f32) -> LayoutJob {
+pub(super) fn symbol_formula(before: &str, after: &str, size: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     job.append(before, 0.0, format(size, symbols()));
     job.append(
@@ -879,7 +879,7 @@ fn symbol_formula(before: &str, after: &str, size: f32) -> LayoutJob {
 }
 
 /// A function key's label.
-fn function_label(func: Func, size: f32) -> LayoutJob {
+pub(super) fn function_label(func: Func, size: f32) -> LayoutJob {
     let x = ("x", true);
     match func {
         Func::Square => formula(&[x, ("²", false)], size),
@@ -904,7 +904,7 @@ fn function_label(func: Func, size: f32) -> LayoutJob {
 }
 
 /// `sin`, `sin⁻¹`, `sinh` or `sinh⁻¹`, as the Trigonometry menu shows them.
-fn trig_label(trig: Trig) -> String {
+pub(super) fn trig_label(trig: Trig) -> String {
     let mut label = trig.function.label().to_string();
     if trig.hyperbolic {
         label.push('h');
@@ -917,7 +917,7 @@ fn trig_label(trig: Trig) -> String {
 
 /// The Trigonometry menu's icon: a right triangle with its angle marked. Windows draws
 /// it from the Calculator's own icon font.
-fn paint_triangle_icon(painter: &Painter, center: Pos2, size: f32, color: Color32) {
+pub(super) fn paint_triangle_icon(painter: &Painter, center: Pos2, size: f32, color: Color32) {
     let s = size / 16.0;
     let stroke = Stroke::new(1.0 * s.max(1.0), color);
     let at = |x: f32, y: f32| center + vec2(x * s, y * s);
