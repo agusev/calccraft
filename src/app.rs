@@ -3,10 +3,14 @@
 mod access;
 mod converter_view;
 mod date_view;
+mod graph_canvas;
+mod graphing_keypad;
+mod graphing_view;
 mod palette;
 mod programmer_view;
 mod region;
 mod scientific_view;
+mod share;
 mod strings;
 
 use std::sync::{Arc, OnceLock};
@@ -293,16 +297,19 @@ enum Panel {
 enum Mode {
     Standard,
     Scientific,
+    Graphing,
     Programmer,
     DateCalculation,
     Converter(Category),
 }
 
 impl Mode {
-    /// The modes of the menu's "Calculator" group; the converters follow.
-    const CALCULATORS: [Mode; 4] = [
+    /// The modes of the menu's "Calculator" group, in Windows' order; the converters
+    /// follow.
+    const CALCULATORS: [Mode; 5] = [
         Mode::Standard,
         Mode::Scientific,
+        Mode::Graphing,
         Mode::Programmer,
         Mode::DateCalculation,
     ];
@@ -311,6 +318,7 @@ impl Mode {
         match self {
             Mode::Standard => tr("StandardModeText"),
             Mode::Scientific => tr("ScientificModeText"),
+            Mode::Graphing => tr("GraphingCalculatorModeText"),
             Mode::Programmer => tr("ProgrammerModeText"),
             Mode::DateCalculation => tr("DateCalculationModeText"),
             Mode::Converter(category) => category_name(category),
@@ -319,11 +327,12 @@ impl Mode {
 
     /// The mode an `Alt` + digit shortcut opens. Windows' `NavCategory` gives the
     /// calculators `Alt+1` (Standard) to `Alt+5` (Date calculation) and the converters
-    /// none; Graphing (`Alt+3`) doesn't exist here yet.
+    /// none.
     fn for_alt_key(key: Key) -> Option<Mode> {
         match key {
             Key::Num1 => Some(Mode::Standard),
             Key::Num2 => Some(Mode::Scientific),
+            Key::Num3 => Some(Mode::Graphing),
             Key::Num4 => Some(Mode::Programmer),
             Key::Num5 => Some(Mode::DateCalculation),
             _ => None,
@@ -416,6 +425,7 @@ pub struct CalculatorApp {
     last_calculator: Mode,
     date: date_view::DateState,
     converter: converter_view::ConverterState,
+    graphing: graphing_view::GraphingState,
     flyout: Flyout,
     /// Whether the window is wide enough for the docked history and memory panel.
     docked: bool,
@@ -498,6 +508,14 @@ impl CalculatorApp {
         if let Some(saved) = cc.storage.and_then(|s| s.get_string(CONVERTER_KEY)) {
             converter.converter.restore_preferences(&saved);
         }
+        let mut graphing = graphing_view::GraphingState::new();
+        graphing.match_app_theme = cc
+            .storage
+            .and_then(|s| s.get_string(graphing_view::THEME_KEY))
+            .is_some_and(|v| v == "true");
+        // Ctrl with plus, minus and 0 zoom the graph, not the whole window, and Windows
+        // Calculator has no such zoom elsewhere either.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         Self {
             mode: Mode::Standard,
             calc: Calculator::default(),
@@ -506,6 +524,7 @@ impl CalculatorApp {
             last_calculator: Mode::Standard,
             date: date_view::DateState::new(),
             converter,
+            graphing,
             flyout: Flyout::None,
             docked: false,
             dock_tab: Panel::History,
@@ -543,6 +562,7 @@ impl CalculatorApp {
             || self.converter.popup_open()
             || self.programmer.popup_open()
             || self.scientific.popup_open()
+            || self.graphing.popup_open()
             || self.settings_popup.is_some()
     }
 
@@ -584,6 +604,8 @@ impl CalculatorApp {
         region::set_region(choice.as_deref());
         self.region_choice = choice;
         self.update_fonts(ctx);
+        // A decimal comma changes how equations are read.
+        self.graphing.reparse(graphing_view::region_syntax());
     }
 
     /// Loads the script fonts the language and the region need (all of them once a list
@@ -648,6 +670,8 @@ impl CalculatorApp {
         self.converter.close_popup();
         self.programmer.close_popup();
         self.scientific.close_popup();
+        self.graphing.close_popup();
+        self.graphing.tracing = false;
         if let Mode::Converter(category) = mode {
             self.converter.converter.set_category(category);
         }
@@ -1821,6 +1845,8 @@ impl CalculatorApp {
                         let icon = match mode {
                             Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
                             Mode::Scientific => self.icon(ICON_SCIENTIFIC, "∫", 16.0),
+                            // Drawn below: Windows' comes from the Calculator's own font.
+                            Mode::Graphing => LayoutJob::default(),
                             Mode::Programmer => self.icon(ICON_CODE, "</>", 16.0),
                             Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
                             Mode::Converter(category) => {
@@ -1837,6 +1863,10 @@ impl CalculatorApp {
                         let focus = self.take_popup_focus(selected);
                         if self.nav_item(ui, item, id, icon, mode.title(), &name, selected, focus) {
                             chosen = Some(mode);
+                        }
+                        if mode == Mode::Graphing {
+                            let center = pos2(item.left() + 24.0, item.center().y);
+                            graphing_view::paint_graph_icon(ui.painter(), center, 16.0, p.text);
                         }
                     }
                 }
@@ -2510,6 +2540,10 @@ impl eframe::App for CalculatorApp {
             let value = choice.as_deref().unwrap_or(SYSTEM_CHOICE);
             storage.set_string(key, value.to_owned());
         }
+        storage.set_string(
+            graphing_view::THEME_KEY,
+            self.graphing.match_app_theme.to_string(),
+        );
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
@@ -2556,6 +2590,7 @@ impl CalculatorApp {
             _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
             Mode::DateCalculation => self.handle_date_keyboard(&ctx),
             Mode::Converter(_) => self.handle_converter_keyboard(&ctx),
+            Mode::Graphing => self.handle_graphing_keyboard(&ctx),
             Mode::Standard | Mode::Scientific | Mode::Programmer => self.handle_keyboard(&ctx),
         }
         let now = ctx.input(|i| i.time);
@@ -2564,6 +2599,17 @@ impl CalculatorApp {
         ui.painter().rect_filled(full, 0.0, self.palette.background);
         if self.page == Page::Settings {
             self.draw_settings(ui, full);
+            return;
+        }
+
+        if self.mode == Mode::Graphing {
+            let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
+            self.draw_header(ui, header);
+            self.draw_graphing_mode(ui, full, header.bottom());
+            self.draw_graphing_popups(ui);
+            if self.flyout == Flyout::Navigation {
+                self.draw_navigation(ui, full);
+            }
             return;
         }
 
@@ -3162,6 +3208,14 @@ impl TitleBar {
         Self {}
     }
 
+    /// The window's `HWND`, for the share sheet.
+    fn hwnd(&self) -> Option<isize> {
+        #[cfg(windows)]
+        return self.hwnd;
+        #[cfg(not(windows))]
+        None
+    }
+
     #[cfg(windows)]
     fn apply(&self, theme: egui::Theme) {
         use windows_sys::Win32::Graphics::Dwm::{
@@ -3233,8 +3287,12 @@ mod tests {
         let mut events = vec![key(Key::Num2, Modifiers::ALT)];
         assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Scientific));
 
-        // Graphing doesn't exist yet.
         let mut events = vec![key(Key::Num3, Modifiers::ALT)];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Graphing));
+        assert!(events.is_empty());
+
+        // Alt+6 is no mode.
+        let mut events = vec![key(Key::Num6, Modifiers::ALT)];
         assert_eq!(take_mode_shortcut(&mut events), None);
         assert_eq!(events.len(), 1);
     }

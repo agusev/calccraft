@@ -45,11 +45,30 @@ pub(super) fn control(
     radius: f32,
     info: impl Fn() -> WidgetInfo,
 ) -> Response {
+    let sense = if enabled {
+        Sense::CLICK
+    } else {
+        Sense::hover()
+    };
+    interact(ui, p, rect, id, sense, radius, info)
+}
+
+/// Like `control`, for a control that senses more than clicks (the graph and the sliders
+/// are dragged): focusable unless covered or only hovered.
+pub(super) fn interact(
+    ui: &Ui,
+    p: &Palette,
+    rect: Rect,
+    id: Id,
+    sense: Sense,
+    radius: f32,
+    info: impl Fn() -> WidgetInfo,
+) -> Response {
     let covered = covered(ui);
-    let sense = match (enabled, covered) {
-        (false, _) => Sense::hover(),
-        (true, true) => Sense::CLICK,
-        (true, false) => Sense::CLICK | Sense::FOCUSABLE,
+    let sense = if covered || sense == Sense::hover() {
+        sense
+    } else {
+        sense | Sense::FOCUSABLE
     };
     // egui's arrow-key search remembers the focusable widgets of earlier frames for as
     // long as their ids are used, so covered controls take another id: otherwise the

@@ -1,13 +1,14 @@
 [package]
 name = "calculator"
-version = "0.6.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.95"
-description = "A clone of the Windows 11 Calculator (Standard, Scientific, Programmer, Date calculation and unit converters) built with egui"
+description = "A clone of the Windows 11 Calculator (Standard, Scientific, Graphing, Programmer, Date calculation and unit converters) built with egui"
 readme = "README.md"
 publish = false
 
 [dependencies]
+arboard = { version = "3.6", default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 eframe = { version = "0.36.2", features = ["persistence"] }
 num-bigint = "0.4"
@@ -15,7 +16,16 @@ num-rational = "0.4.2"
 num-traits = "0.2.19"
 
 [target."cfg(windows)".dependencies]
+png = "0.18"
 raw-window-handle = "0.6"
+windows = { version = "0.62", features = [
+    "ApplicationModel_DataTransfer",
+    "Foundation_Collections",
+    "Storage_Streams",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_UI_Shell",
+] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm"] }
 
 [build-dependencies]

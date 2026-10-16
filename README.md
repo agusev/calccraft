@@ -57,6 +57,28 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 
 ![Screenshot of the scientific mode](docs/scientific.png)
 
+- **Graphing mode** (open the ☰ menu, or `Alt+3`):
+  - Up to 14 equations at once, each in its own color: functions (`y = x^2`, or just `x^2`),
+    `x = …`, relations such as `x^2 + y^2 = 25`, and inequalities (`y < sin(x)`), whose region
+    is dotted and whose strict boundary is dashed. Type them, or use the keypad with `2nd` and
+    its Trigonometry, Inequalities and Function menus; implicit multiplication (`2x`, `mx + b`)
+    works. An equation is graphed when you press `Enter` or leave its box.
+  - The colored fₙ button hides and shows a line; hover a box for the function analysis, the
+    line options (14 colors, solid, dashed or dotted) and remove.
+  - Pan by dragging, zoom with the wheel, the + and − buttons or `Ctrl` + plus and minus. The
+    view fits the equations by itself until you move it; the graph view button (`Ctrl+0`)
+    brings that back.
+  - Hover a curve to read a point, or turn on tracing and move its pointer with the arrow keys.
+  - Free variables get sliders: `y = mx + b` gets `m` and `b`, each with its minimum, step and
+    maximum.
+  - **Function analysis:** domain, range, intercepts, minima and maxima, inflection points,
+    asymptotes, parity, period and monotonicity, with exact values (`(√3/3 + 1, −2√3 − 6)`,
+    `{(2πn₁ + π/2, 1), n₁ ∈ ℤ}`).
+  - **Graph options:** the window's x and y ranges, radians, degrees or gradians, the line
+    thickness, and the graph theme (always light, as in Windows, or matching the app).
+  - Right-click the graph to copy it as an image, or use the share button to send the graph
+    with its equations and variables through the Windows share sheet.
+
 - **Date calculation mode** (open the ☰ menu):
   - **Difference between dates:** the difference broken into years, months, weeks and days,
     plus the total number of days (`4 years, 4 months, 4 days`, `1587 days`).
@@ -112,7 +134,7 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `Ctrl+H` | Show or hide history (in narrow windows) |
 | `Ctrl+Shift+D` | Clear history |
 | `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number or an expression |
-| `Alt+1` / `Alt+2` / `Alt+4` / `Alt+5` or `Ctrl+E` | Standard / Scientific / Programmer / Date calculation mode |
+| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` / `Alt+5` or `Ctrl+E` | Standard / Scientific / Graphing / Programmer / Date calculation mode |
 | `Tab` / `Shift+Tab`, arrow keys | Move the keyboard focus |
 | `Space` or `Enter` | Press the focused control (`Enter` is `=` on the keypad) |
 
@@ -155,6 +177,16 @@ In the programmer mode, Windows' own keys apply:
 `Ctrl+C` copies the value in the current radix without its digit groups, and `Ctrl+V` pastes
 numbers and expressions in the current radix, C-style notation included (`0x1F` or `1Fh` in HEX,
 `0b101` in BIN, `255u` or `1_000` in DEC), as long as they fit into the word size.
+
+In the graphing mode, the keyboard types into the equation box with the focus, and:
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Graph the equation and go to the next box |
+| `Ctrl` + `+` or `=`, `Ctrl` + `-` | Zoom in, zoom out |
+| `Ctrl+0` | The graph view button: back to the automatic view, or keep the current one |
+| Arrow keys (with `Shift`: slower) | Move the trace pointer while tracing |
+| `Esc` | Stop tracing, or close an open menu or flyout |
 
 In the converters, the digits, `.` or `,`, `Backspace` and `Delete` (`CE`) work as above,
 `F9` or `-` changes the sign (Temperature, Power and Angle only), `Ctrl+C` copies the active
@@ -238,6 +270,7 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
 | `src/converter.rs` | Unit converter logic: a port of the Windows converter with its units, factors, rounding and region defaults; paste; unit tests. No UI code. |
 | `src/locale.rs` | Regional number formats (decimal separator, digit grouping) and date patterns; unit tests. No UI code. |
+| `src/graphing.rs`, `src/graphing/` | The graphing mode's math: the equation parser (`parse.rs`), expressions and their derivatives (`expr.rs`), plotting, best fit and tracing (`plot.rs`), the function analysis (`analysis.rs`) and exact values (`exact.rs`); unit tests. No UI code. |
 | `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels (flyouts or docked) with their context menus, menu, Settings, keyboard handling, fonts, title bar tint |
 | `src/app/access.rs` | Keyboard focus, focus rectangles and screen reader names for the custom-painted controls |
 | `src/app/strings.rs` | The interface's text in the user's language, from `locales/` |
@@ -247,6 +280,9 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
 | `src/app/scientific_view.rs` | User interface of the scientific mode: angle unit and F-E, Trigonometry and Function menus, keypad with `2nd` |
 | `src/app/programmer_view.rs` | User interface of the programmer mode: radix list, word size, Bitwise and Bit shift menus, keypad, bit toggling keypad |
+| `src/app/graphing_view.rs` | User interface of the graphing mode: layout, equation boxes, variable sliders, function analysis, graph options and line options |
+| `src/app/graph_canvas.rs` | The graphing mode's graph: grid, axes, lines and regions, tracing, the buttons over the graph, copying it |
+| `src/app/graphing_keypad.rs` | The graphing mode's keypad and its Trigonometry, Inequalities and Function menus |
 | `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1`, and CalcCraft's own few in `calccraft.txt` |
 | `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/scientific.png`, `docs/date-calculation.png`, `docs/programmer.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
@@ -255,8 +291,18 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 
 ## Differences from Windows Calculator
 
-- The Standard, Scientific, Programmer and Date calculation modes and 12 of the 13 converters
-  exist. The graphing mode and the Currency converter are not implemented.
+- All modes and 12 of the 13 converters exist. The Currency converter is not implemented.
+- The graphing mode has its own math engine (Windows' is proprietary):
+  - Equations are plain text laid out like math (italic variables, raised exponents), not
+    Windows' math editor, so a fraction stays `1/x` instead of being built up. Functions beyond
+    the keypad's (Windows' `deriv`, `integral` …) aren't supported.
+  - The function analysis is numeric, with the results written as the integers, fractions,
+    multiples of π and square roots they are; other values are decimals (6 significant digits),
+    where Windows' symbolic engine would give an exact form. Features beyond ±1000 aren't found.
+  - The automatic view uses CalcCraft's own rules. They match Windows' view for `x^2`, and give
+    similar ones elsewhere.
+  - A share's title is "CalcCraft" instead of Windows' "Look what I graphed with Windows
+    Calculator".
 - Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle),
   the Programmer mode's icons and the Scientific mode's key labels (`x²`, `xʸ`, `2ⁿᵈ`, …) and
   menu icons are similar Segoe Fluent Icons glyphs, Segoe UI text or drawn in code: Windows draws

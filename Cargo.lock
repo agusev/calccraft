@@ -521,14 +521,17 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "calculator"
-version = "0.6.0"
+version = "0.9.0"
 dependencies = [
+ "arboard",
  "chrono",
  "eframe",
  "num-bigint",
  "num-rational",
  "num-traits",
+ "png",
  "raw-window-handle",
+ "windows",
  "windows-sys 0.61.2",
  "winresource",
 ]

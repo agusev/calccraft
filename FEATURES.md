@@ -45,11 +45,11 @@ own `NOT_STARTED` entry.
 | **Phase 4: Programmer Calculator Mode** | 8 | 8 | 0 | 0 | 0 |
 | **Phase 5: Date Calculation** | 4 | 4 | 0 | 0 | 0 |
 | **Phase 6: Unit Conversion (13 categories)** | 14 | 13 | 0 | 0 | 1 |
-| **Phase 7: Graphing Calculator** | 6 | 0 | 0 | 0 | 6 |
+| **Phase 7: Graphing Calculator** | 6 | 6 | 0 | 0 | 0 |
 | **Phase 8: Application Shell, UX & Accessibility** | 11 | 10 | 0 | 1 | 0 |
-| **TOTAL** | **67** | **59** | **0** | **1** | **7** |
+| **TOTAL** | **67** | **65** | **0** | **1** | **1** |
 
-*Last updated: 2026-10-16 (CalcCraft 0.6.0)*
+*Last updated: 2026-10-16 (CalcCraft 0.9.0)*
 
 ---
 
@@ -76,7 +76,9 @@ graph TD
 5. **Phase 5: Date calculation** (`src/dates.rs`, `src/app/date_view.rs`). *Done.*
 6. **Phase 6: Unit converters** (`src/converter.rs`, `src/app/converter_view.rs`): 12 converters
    with Windows' units, factors and rounding. *Done, except the Currency converter.*
-7. **Phase 7: Graphing mode**: expression parser, plotting, variable sliders, graph analysis.
+7. **Phase 7: Graphing mode** (`src/graphing.rs` and `src/graphing/`, `src/app/graphing_view.rs`,
+   `src/app/graph_canvas.rs`, `src/app/graphing_keypad.rs`): expression parser, plotting, tracing,
+   variable sliders, function analysis. *Done.*
 8. **Phase 8: Shell & system** (`src/app.rs`, `src/app/access.rs`, `src/app/strings.rs`, `src/app/region.rs`,
    `src/locale.rs`): navigation, theming, layouts, hotkeys, accessibility, localization. *Done,
    except right-to-left and complex scripts, which egui can't draw yet.*
@@ -865,68 +867,150 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 ---
 
 ### Phase 7: Graphing Calculator
-*2D plotting, variables and graph analysis.*
+*2D plotting, variables and graph analysis. Logic in `src/graphing.rs` and its modules (no UI
+code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` and
+`src/app/graphing_keypad.rs`.*
 
-> **Rust notes for the whole phase:** needs an expression parser (with implicit multiplication
-> and variables) and a plot view. `egui_plot` is a candidate; custom painting matches the rest of
-> the app. Graphing depends on the Scientific math functions.
+> **Rust notes for the whole phase:** Windows graphs with a proprietary engine (`GraphingImpl`
+> in the open source code is a mock), so CalcCraft has its own: a parser for the linear syntax
+> the keypad writes (implicit multiplication, variables, functions without parentheses),
+> evaluation in `f64` (like Windows' graph engine, unlike the calculator engine's rationals),
+> sampling and marching squares for the lines, and a numeric analysis with exact-value
+> recognition. Everything is painted by hand like the rest of the app (no `egui_plot`); the
+> equation boxes are egui `TextEdit`s, the app's only text fields.
 
 #### `FEAT-GRAPH-001` 2D Cartesian Function Plotting
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CORE-003`, `FEAT-SCI-002`
-- **Windows ref:** `src/GraphControl`, `src/GraphingImpl`
-- **Description:** Plot $y = f(x)$ on auto-scaled axes.
+- **Windows ref:** `src/GraphControl`, `src/Calculator/Views/GraphingCalculator/GraphingCalculator.xaml(.cs)`,
+  `EquationInputArea.xaml(.cs)`, `GraphingNumPad.xaml(.cs)`, `EquationStylePanelControl.xaml(.cs)`,
+  `src/Calculator.ViewModels/GraphingCalculator/*.cs`, `src/Calculator/Controls/EquationTextBox.cs`
+- **Rust:** `src/graphing.rs` (`Equation`, `Shape`), `src/graphing/parse.rs`,
+  `src/graphing/expr.rs`, `src/graphing/plot.rs` (`plot`, `grid_step`), `src/app/graphing_view.rs`
+  (`GraphingState`, `draw_equation_row`, `math_job`, `draw_style_flyout`), `src/app/graph_canvas.rs`
+  (`draw_graph`, `paint_grid`), `src/app/graphing_keypad.rs`, `src/app/palette.rs` (`GraphPalette`)
+- **Description:** The Graphing mode (`Alt+3`): up to 14 equations, each in its own color
+  (`EquationBrush1`–`14` in the order of `colorAssignmentMapping`, light or dark with the graph
+  theme), as y = f(x) (or a bare expression), x = g(y) or implicit relations such as
+  x² + y² = 25, and as inequalities (`<`, `≤`, `>`, `≥`) with Windows' 100 × 100 dot pattern and
+  a dashed line for strict ones. The keypad types what `GetButtonOutput` writes (`sin()` with the
+  cursor inside, `root(x,n)` with the n selected), with `2nd` and the Trigonometry,
+  Inequalities and Function menus. Graph options: units, line thickness, graph theme.
 - **Acceptance Criteria:**
-  - Several equations at once, each in its own color (Windows' `EquationBrush1`–`14`, see `app_theme.md`).
-  - Hiding an equation hides its curve.
+  - Several equations at once, each in its own color; the fₙ button hides and shows a line.
+  - An equation is graphed when it's submitted (Enter, ↵, or leaving the box after a change);
+    syntax errors show Windows' messages (`ParenthesisMismatch` …) on the red box's icon.
+  - A window under 800 px shows the graph or the equations, with Windows' switch in the
+    header; wider, the equations take a third (300 to 420 px).
+  - Line options (14 colors, solid, dash or dot), the box's context menu (cut, copy, paste,
+    undo, select all, analyze, style, remove), and Windows' grid colors (#C6C6C6 and #E3E3E3 on
+    white by default, "Always light").
+- **Differences:** the equation boxes are plain text laid out like math (italic variables,
+  raised exponents, spaced relations) rather than Windows' math editor, so a fraction stays
+  `1/x` instead of being built up. The engine is CalcCraft's own: functions Windows' engine
+  knows beyond the keypad's (`integral`, `deriv`, sums …) aren't supported. Equations aren't
+  kept when the app closes, as in Windows; the graph theme is (`IsGraphThemeMatchApp`).
 
 #### `FEAT-GRAPH-002` Viewport Navigation (Pan, Zoom, Reset)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-GRAPH-001`
-- **Windows ref:** `src/GraphControl`
-- **Description:** Pan by dragging, zoom with the wheel and buttons, reset the view.
+- **Windows ref:** `src/GraphControl/Control/Grapher.cpp` (`OnManipulationDelta`,
+  `OnPointerWheelChanged`, `ZoomFromCenter`, `ResetGrid`), `GraphingCalculator.xaml.cs`,
+  `GraphingSettingsViewModel.cs`
+- **Rust:** `src/graphing/plot.rs` (`View`, `best_fit`), `src/app/graph_canvas.rs`
+  (`draw_graph`, `draw_graph_buttons`), `src/app/graphing_view.rs` (`zoom_graph`,
+  `toggle_graph_view`, `draw_graph_settings`)
+- **Description:** Drag to pan, the wheel zooms around the pointer (15 % a notch, Windows'
+  damper), the + and − buttons from the center (by 1.0625, repeating while held), Ctrl + plus,
+  Ctrl + minus and Ctrl + 0 (the graph view button). The view fits itself to the equations until
+  it's moved by hand (`IsManualAdjustment`); the graph view button and "Reset view" bring the
+  automatic fit back. The graph options' X-Min … Y-Max boxes set the window.
 - **Acceptance Criteria:**
-  - "Reset view" restores the default origin and scale.
+  - "Reset view" restores the automatic view; an empty graph shows −10 to 10 on both axes.
   - `Ctrl` + `+` / `Ctrl` + `-` zoom.
+  - For x² in a 1.64 : 1 graph, the automatic view is Windows' (x ±27.2204, y −3.025 to 30.25).
+- **Differences:** Windows' engine picks its automatic view with rules that aren't public;
+  CalcCraft's `best_fit` (the key points near the origin, the values there, a tenth more where a
+  curve turns, proportional axes) matches it for x² and gives similar views elsewhere. egui's
+  own Ctrl + plus / minus / 0 zoom of the whole window is turned off in every mode (Windows has
+  none).
 
 #### `FEAT-GRAPH-003` Interactive Curve Tracer
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P3`
 - **Depends On:** `FEAT-GRAPH-001`
-- **Windows ref:** `src/GraphControl`
-- **Description:** Move a cursor along a curve to read $(x, y)$.
+- **Windows ref:** `src/GraphControl/DirectX/RenderMain.cpp` (`GetPrecision`, the nearest point),
+  `Grapher.cpp` (`HandleTracingMovementTick`), `GraphingCalculator.xaml.cs`
+  (`OnTracePointChanged`, `PositionGraphPopup`)
+- **Rust:** `src/graphing/plot.rs` (`trace`, `View::precision`), `src/app/graph_canvas.rs`
+  (`trace_text`, `paint_trace_popup`, `paint_trace_pointer`)
+- **Description:** Over the graph, the nearest curve point within 20 px gets a dot in its color
+  and a tooltip with its value, as Windows writes it: x rounded to 10^(⌊log₁₀ x range⌋ − 3),
+  y with 15 decimals, `(3.82, 14.592400000000000)`. The tracing button turns on active
+  tracing: Windows' arrow pointer, moved by the mouse or the arrow keys (5 px every 0.1 s, 1 px
+  with Shift); Esc stops it.
 - **Acceptance Criteria:** the cursor snaps to the nearest visible curve and shows its coordinates.
 
 #### `FEAT-GRAPH-004` Variable Sliders ($y = mx + b$)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P3`
 - **Depends On:** `FEAT-GRAPH-001`
-- **Windows ref:** `src/Calculator/Views/GraphingCalculator`
-- **Description:** Free variables get sliders.
-- **Acceptance Criteria:** value, minimum, maximum and step can be set; the curve updates while dragging.
+- **Windows ref:** `src/Calculator/Views/GraphingCalculator/EquationInputArea.xaml(.cs)`
+  (`VariableDataTemplate`, `SubmitTextbox`), `VariableViewModel.cs`, `src/GraphControl/Models/Variable.h`,
+  `Grapher.cpp` (`UpdateVariables`)
+- **Rust:** `src/app/graphing_view.rs` (`Variable`, `draw_variable`, `value_box`, `draw_slider`,
+  `GraphingState::update_variables`)
+- **Description:** Every free variable of the graphed equations gets a card (in alphabetical
+  order): `a = 1` on a slider from −5 to 5 in steps of 0.1, with Min, Step and Max behind the
+  chevron. Variables that stay keep their values.
+- **Acceptance Criteria:** value, minimum, maximum and step can be set; the curve updates while
+  dragging. A value beyond the slider moves its end, a minimum above the maximum moves the
+  maximum 10 above it (and the other way around), and a step of 0 or less is refused.
 
 #### `FEAT-GRAPH-005` Key Graph Features Analysis
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P3`
 - **Depends On:** `FEAT-GRAPH-001`
-- **Windows ref:** `docs/ManualTests.md` (Key Graph Features), `src/GraphingImpl`
-- **Description:** Domain, range, intercepts, minima and maxima, inflection points, asymptotes,
-  parity, monotonicity, periodicity.
+- **Windows ref:** `docs/ManualTests.md` (Key Graph Features), `KeyGraphFeaturesPanel.xaml`,
+  `EquationViewModel.cs` (`PopulateKeyGraphFeatures`), `Grapher.cpp` (`AnalyzeEquation`)
+- **Rust:** `src/graphing/analysis.rs`, `src/graphing/exact.rs`, `src/app/graphing_view.rs`
+  (`draw_analysis`, `analysis_items`)
+- **Description:** Domain, range, x- and y-intercepts, minima and maxima, inflection points,
+  vertical, horizontal and oblique asymptotes, parity, period and monotonicity, in Windows'
+  order and words, with its messages for what a function doesn't have.
 - **Acceptance Criteria:**
-  - Correct for $y = x^2$, $y = 1/x$, $y = \sin(x)$.
-  - Unsupported functions show a message instead of wrong results.
-- **Rust notes:** Windows uses a proprietary math engine for this; it is the largest item in the file.
+  - Correct for all the functions of Windows' manual tests: y = x, 1/x, x², x³, eˣ, ln x,
+    sin x, cos x, tan x, √(25 − x²) and (−3x² + 2)/(x − 1) (`−2√3 − 6`, `y = −3x − 3`).
+  - Unsupported functions show a message instead of wrong results (y = mx + b: "Analysis is
+    not supported for this function"; x = y²: "only supported for functions in the f(x)
+    format"), and features the analysis can't find are listed as too complex.
+- **Rust notes:** the analysis is numeric: sign changes refined by bisection on a grid from
+  −1000 to 1000, the symbolic first and second derivatives, limits from far-away and nearby
+  values, and `exact` turning the doubles back into integers, fractions, multiples of π and
+  (a + b√c)/d. Functions of trigonometric functions of linear arguments are analyzed over one
+  period and written as families (`{πn₁, n₁ ∈ ℤ}`).
+- **Differences:** Windows solves symbolically. Exact values beyond those forms (e^−1, roots of
+  cubics) are decimals with 6 significant digits; features beyond ±1000 aren't found; and
+  CalcCraft finds some features Windows calls too complex (sin(sin x)).
 
 #### `FEAT-GRAPH-006` Graph Export & Sharing
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P3`
 - **Depends On:** `FEAT-GRAPH-001`
-- **Windows ref:** `src/Calculator/Views/GraphingCalculator`
-- **Description:** Copy the graph as an image.
-- **Acceptance Criteria:** the image matches the current view and equations.
-- **Differences:** Windows also shares through the Windows share sheet; a desktop Rust app can copy to the clipboard or save a PNG.
+- **Windows ref:** `GraphingCalculator.xaml.cs` (`OnShareClick`, `OnDataRequested`,
+  `GraphMenuFlyoutItem_Click`), `Grapher.cpp` (`GetGraphBitmapStream`)
+- **Rust:** `src/app/graph_canvas.rs` (`finish_capture`, `share_graph`), `src/app/share.rs`,
+  `src/app/graphing_view.rs` (`draw_graph_menu`, `draw_share_error`, `Capture`)
+- **Description:** The graph's context menu has Copy, which puts an image of the graph on the
+  clipboard. The share button opens the Windows share sheet with the graph (`graph.png`), the
+  equations in their colors and the variables as HTML, and the graph as a bitmap; when the
+  sheet can't open, a dialog says "Unable to share at this time."
+- **Acceptance Criteria:** the image matches the current view and equations (drawn without
+  the buttons and the tracer, at the graph's size); the share's HTML is `OnDataRequested`'s.
+- **Differences:** the share's title is "CalcCraft" (Windows' `ShareActionTitle` names the
+  Windows Calculator); the equations are shared as typed, not through `ConvertToLinear`.
 
 ---
 
@@ -946,12 +1030,12 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
     over when switching between them, as in Windows; the selected mode has the accent pill.
   - Every new mode adds itself to `Mode` and to the menu.
 - **Differences:** Windows lists 18 modes: Standard, Scientific, Graphing, Programmer, Date
-  calculation, and 13 converters. CalcCraft lists only the implemented modes (Standard,
-  Scientific, Programmer, Date calculation and 12 converters, without Currency). Windows draws
-  the Programmer icon and six converter icons (Volume, Weight, Temperature, Speed, Data, Angle)
-  from the Calculator's own icon font, whose license limits it to Windows; CalcCraft uses similar
-  Segoe Fluent Icons glyphs (`</>` for Programmer). The Scientific mode's beaker is Windows' own
-  glyph, which Segoe Fluent Icons has. As in Windows, switching between the Standard, Scientific
+  calculation, and 13 converters. CalcCraft lists all but the Currency converter. Windows draws
+  the Graphing and Programmer icons and six converter icons (Volume, Weight, Temperature, Speed,
+  Data, Angle) from the Calculator's own icon font, whose license limits it to Windows;
+  CalcCraft draws the Graphing icon in code and uses similar Segoe Fluent Icons glyphs for the
+  others (`</>` for Programmer). The Scientific mode's beaker is Windows' own glyph, which Segoe
+  Fluent Icons has. As in Windows, switching between the Standard, Scientific
   and Programmer modes starts the other one over, and they share the memory. The mode hotkeys
   are `FEAT-SHELL-010`.
 
@@ -1122,7 +1206,7 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
   the system title bar and only recolors it.
 
 #### `FEAT-SHELL-010` Mode Hotkeys (Alt+1 … Alt+5)
-- **Status:** `[x] COMPLETED` (for the implemented modes)
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-SHELL-001`
 - **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs` (`VirtualKey`),
@@ -1131,8 +1215,7 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 - **Description:** `Alt+1` Standard, `Alt+2` Scientific, `Alt+3` Graphing, `Alt+4` Programmer,
   `Alt+5` Date calculation, and `Ctrl+E` Date calculation too. The converters have none.
 - **Acceptance Criteria:**
-  - Keys of modes that don't exist yet (`Alt+3`, Graphing) do nothing; `Alt+1`, `Alt+2`,
-    `Alt+4`, `Alt+5` and `Ctrl+E` work today.
+  - `Alt+1` to `Alt+5` and `Ctrl+E` open their modes.
   - As in Windows, they do nothing in keep-on-top mode, on the Settings page or with `AltGr`
     (`Ctrl+Alt`), and they work with a menu or flyout open. The digit isn't typed.
 - **Differences:** Windows switches when the key is released, CalcCraft when it's pressed.
@@ -1183,3 +1266,4 @@ Windows source in `../win-calculator`.
 | 2026-10-15 | Claude Code | `FEAT-SHELL-007`, `FEAT-SHELL-008` | Added the Language and Regional format settings: drop-down cards in Appearance that switch the language and the formats at runtime and save them, with names in their own scripts, type-ahead, and CalcCraft's own translations of their labels (`locales/calccraft.txt`) |
 | 2026-10-16 | Claude Code | `FEAT-PROG-001`–`FEAT-PROG-008` | Finished Phase 4 (CalcCraft 0.5.0): Windows' integer mode of `CCalcEngine` in `src/engine/integer.rs` and `Calculator::programmer()` (radixes, word sizes, bitwise operators, shifts, rotations, bit toggling, `DisplayNum` truncation, Programmer paste rules), and the Programmer mode's UI in `src/app/programmer_view.rs` after `Calculator.xaml` and the `CalculatorProgrammer*.xaml` views; added `FEAT-PROG-008` for the mode's UI. Updated `FEAT-CORE-003`, `FEAT-CORE-004`, `FEAT-SHELL-001`, `-002` and `-010`; checked side by side with the Windows Calculator |
 | 2026-10-16 | Claude Code | `FEAT-SCI-001`–`FEAT-SCI-009` | Finished Phase 3 (CalcCraft 0.6.0): the Scientific mode. `src/engine/math.rs` computes powers, roots, logarithms, trigonometric and hyperbolic functions and the gamma function on `num-bigint` floats with `ratpak`'s domain rules; `src/engine.rs` adds `^`, `yroot`, `log base` and the Scientific `mod`, the functions with Windows' expression names, π, e and rand, `exp` entry, F-E, angle units and 32 digits; `src/app/scientific_view.rs` draws `CalculatorScientificOperators.xaml` with `2nd` and the Trigonometry and Function menus. Added `FEAT-SCI-009` for the mode's UI. Also fixed the error state (`.` disabled, `=` enabled, as calc.exe does) and e-notation paste, and the history and memory lists wrap long numbers. Updated `FEAT-CORE-003`, `-008`, `FEAT-STD-007`, `FEAT-SHELL-001` and `-010`; checked side by side with the Windows Calculator |
+| 2026-10-16 | Claude Code | `FEAT-GRAPH-001`–`FEAT-GRAPH-006` | Finished Phase 7 (CalcCraft 0.9.0): the Graphing mode. `src/graphing.rs` parses the equations (implicit multiplication, variables, functions without parentheses, Windows' syntax errors) and sorts them into y = f(x), x = g(y) and implicit relations, also as inequalities; `src/graphing/plot.rs` samples functions (broken at asymptotes), traces implicit curves by marching squares, marks inequality regions, fits the view and snaps the tracer; `src/graphing/analysis.rs` and `exact.rs` find the key graph features with exact values, per period for periodic functions. The UI (`src/app/graphing_view.rs`, `graph_canvas.rs`, `graphing_keypad.rs`) follows `GraphingCalculator.xaml`, `EquationInputArea.xaml`, `GraphingNumPad.xaml`, `KeyGraphFeaturesPanel.xaml` and `GraphingSettings.xaml`, with 152 new strings in 60 languages; the share button opens the Windows share sheet (`src/app/share.rs`). Updated `FEAT-SHELL-001` and `FEAT-SHELL-010` (`Alt+3`) |
