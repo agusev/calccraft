@@ -89,6 +89,11 @@ const MARGIN: f32 = 4.0;
 const GAP: f32 = 2.0;
 const RADIUS: f32 = 4.0;
 const COMPACT_SIZE: egui::Vec2 = vec2(320.0, 394.0);
+/// The smallest window, Windows' `AppMinWindowWidth` and `AppMinWindowHeight`: every
+/// mode fits without clipping.
+pub const MIN_SIZE: egui::Vec2 = vec2(320.0, 500.0);
+/// Keep-on-top mode shows only the display and the keypad, so it can be smaller.
+const COMPACT_MIN_SIZE: egui::Vec2 = vec2(280.0, 360.0);
 /// From this window width on, the Standard mode docks history and memory in a side
 /// panel (`DockVisible` in `Calculator.xaml`). The panel takes 240 of every 560 px
 /// (`ColumnHistory` is `240*` next to `320*`), up to 320 px.
@@ -490,12 +495,13 @@ impl CalculatorApp {
         if compact {
             self.full_size = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
             ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(COMPACT_MIN_SIZE));
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(COMPACT_SIZE));
         } else {
             ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
-            if let Some(size) = self.full_size.take() {
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
-            }
+            let size = self.full_size.take().unwrap_or(MIN_SIZE);
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(size.max(MIN_SIZE)));
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(MIN_SIZE));
         }
     }
 

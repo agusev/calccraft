@@ -15,7 +15,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("CalcCraft")
             .with_inner_size([320.0, 500.0])
-            .with_min_inner_size([280.0, 360.0])
+            .with_min_inner_size(app::MIN_SIZE)
             .with_icon(app::window_icon()),
         // Settings are saved, but the window always opens at the default size.
         persist_window: false,
