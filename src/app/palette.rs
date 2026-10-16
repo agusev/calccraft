@@ -35,6 +35,8 @@ pub(super) struct Palette {
     pub text: Color32,
     pub text_pressed: Color32,
     pub text_secondary: Color32,
+    /// WinUI's tertiary text: the docked panel's tab headers while pressed.
+    pub text_tertiary: Color32,
     pub text_disabled: Color32,
     pub text_on_accent: Color32,
     /// Cards on the Settings page.
@@ -126,6 +128,7 @@ pub(super) const DARK: Palette = Palette {
     text: Color32::WHITE,
     text_pressed: Color32::from_rgb(0xCF, 0xC8, 0xCF),
     text_secondary: Color32::from_rgb(0xC5, 0xBE, 0xC5),
+    text_tertiary: white(DARK_BACKGROUND, 0.53),
     text_disabled: Color32::from_rgb(0x6C, 0x62, 0x6D),
     text_on_accent: Color32::from_rgb(0x1A, 0x0F, 0x1B),
     card: Color32::from_rgb(0x34, 0x26, 0x35),
@@ -183,6 +186,7 @@ pub(super) const LIGHT: Palette = Palette {
     text: Color32::BLACK,
     text_pressed: black(LIGHT_BACKGROUND, 0.6063),
     text_secondary: black(LIGHT_BACKGROUND, 0.6063),
+    text_tertiary: black(LIGHT_BACKGROUND, 0.4471),
     text_disabled: black(LIGHT_BACKGROUND, 0.3614),
     text_on_accent: Color32::WHITE,
     card: white(LIGHT_BACKGROUND, 0.7),

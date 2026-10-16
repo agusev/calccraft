@@ -66,6 +66,13 @@ const MARGIN: f32 = 4.0;
 const GAP: f32 = 2.0;
 const RADIUS: f32 = 4.0;
 const COMPACT_SIZE: egui::Vec2 = vec2(320.0, 394.0);
+/// From this window width on, the Standard mode docks history and memory in a side
+/// panel (`DockVisible` in `Calculator.xaml`). The panel takes 240 of every 560 px
+/// (`ColumnHistory` is `240*` next to `320*`), up to 320 px.
+const DOCK_WIDTH: f32 = 560.0;
+const DOCK_MAX_WIDTH: f32 = 320.0;
+/// The memory buttons are at most 80 px wide (`MaxWidth="80"`).
+const MEMORY_BUTTON_MAX_WIDTH: f32 = 80.0;
 /// How long (in seconds) a button looks pressed after its keyboard key is pressed.
 const KEY_FLASH: f64 = 0.1;
 
@@ -84,8 +91,15 @@ enum Flyout {
     Navigation,
 }
 
-/// Calculator mode, picked in the navigation menu.
+/// The two lists a flyout or the docked panel shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum Panel {
+    History,
+    Memory,
+}
+
+/// Calculator mode, picked in the navigation menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Standard,
     DateCalculation,
@@ -170,6 +184,10 @@ pub struct CalculatorApp {
     date: date_view::DateState,
     converter: converter_view::ConverterState,
     flyout: Flyout,
+    /// Whether the window is wide enough for the docked history and memory panel.
+    docked: bool,
+    /// The docked panel's tab. Like Windows, it follows the last flyout opened.
+    dock_tab: Panel,
     /// The right-click menu of a history or memory item, when open.
     context_menu: Option<ContextMenu>,
     /// "Keep on top" mode: a small always-on-top window without the memory row.
@@ -221,6 +239,8 @@ impl CalculatorApp {
             date: date_view::DateState::new(),
             converter,
             flyout: Flyout::None,
+            docked: false,
+            dock_tab: Panel::History,
             context_menu: None,
             compact: false,
             full_size: None,
@@ -304,6 +324,8 @@ impl CalculatorApp {
                 Key::Q => Command::MemorySubtract,
                 Key::R => Command::MemoryRecall,
                 Key::L => Command::MemoryClear,
+                // The docked panel already shows the history, so Windows ignores it then.
+                Key::H if self.docked => return,
                 Key::H => return self.toggle_flyout(Flyout::History),
                 Key::D if modifiers.shift => return self.calc.clear_history(),
                 _ => return,
@@ -339,6 +361,12 @@ impl CalculatorApp {
         } else {
             flyout
         };
+        // Windows' docked panel opens on the list whose flyout was opened last.
+        match self.flyout {
+            Flyout::History => self.dock_tab = Panel::History,
+            Flyout::Memory => self.dock_tab = Panel::Memory,
+            Flyout::None | Flyout::Navigation => {}
+        }
     }
 
     fn set_compact(&mut self, ctx: &Context, compact: bool) {
@@ -481,7 +509,8 @@ impl CalculatorApp {
             FontId::new(20.0, semibold()),
             p.text,
         );
-        // Keep on top and history exist only in the Standard mode.
+        // Keep on top and history exist only in the Standard mode, and the history
+        // button only while the history isn't docked.
         if self.mode != Mode::Standard {
             return;
         }
@@ -497,6 +526,9 @@ impl CalculatorApp {
             label,
         ) {
             self.set_compact(&ctx, true);
+        }
+        if self.docked {
+            return;
         }
 
         let label = self.icon(ICON_HISTORY, "↺", 16.0);
@@ -555,13 +587,18 @@ impl CalculatorApp {
             ("M−", Command::MemorySubtract),
             ("MS", Command::MemoryStore),
         ];
-        let width = (rect.width() - 2.0 * MARGIN) / 6.0;
+        // Star columns as in `Calculator.xaml`: the buttons share the width up to 80 px
+        // each, and a 0.01* spacer before `M˅` takes the rest. Docked, `M˅` is gone.
+        let columns = if self.docked { 5.0 } else { 6.0 };
+        let width = ((rect.width() - 2.0 * MARGIN) / (columns + 0.01)).min(MEMORY_BUTTON_MAX_WIDTH);
         let cell = |i: usize| {
-            Rect::from_min_size(
-                pos2(rect.left() + MARGIN + i as f32 * width, rect.top()),
-                vec2(width, rect.height()),
-            )
-            .shrink2(vec2(1.0, 0.0))
+            let left = if i == 5 {
+                rect.right() - MARGIN - width
+            } else {
+                rect.left() + MARGIN + i as f32 * width
+            };
+            Rect::from_min_size(pos2(left, rect.top()), vec2(width, rect.height()))
+                .shrink2(vec2(1.0, 0.0))
         };
         for (i, (label, command)) in buttons.into_iter().enumerate() {
             let enabled = self.calc.is_enabled(command);
@@ -578,6 +615,9 @@ impl CalculatorApp {
             ) {
                 self.calc.execute(command);
             }
+        }
+        if self.docked {
+            return;
         }
 
         let enabled = !self.calc.memory().is_empty() && !self.calc.has_error();
@@ -686,7 +726,8 @@ impl CalculatorApp {
 
     // ---------------------------------------------------- history and memory
 
-    fn draw_flyout(&mut self, ui: &mut Ui, rect: Rect) {
+    /// The history or memory flyout, which covers the keypad.
+    fn draw_flyout(&mut self, ui: &mut Ui, rect: Rect, panel: Panel) {
         let p = self.palette;
         let painter = ui.painter();
         let top = CornerRadius {
@@ -704,8 +745,69 @@ impl CalculatorApp {
         );
         // Clicks on the panel's empty space must not fall through it.
         ui.interact(rect, Id::new("flyout"), Sense::CLICK);
+        self.draw_list(ui, rect, panel, vec2(16.0, 16.0));
+    }
 
-        let history = self.flyout == Flyout::History;
+    /// The docked panel of wide windows: History and Memory tabs over the list, on the
+    /// window background. The tabs are a WinUI `Pivot` (`DockPanelTemplate`): 48 px
+    /// headers in 14 px text, 3 px higher than the panel, with a 16 × 3 px accent
+    /// pipe under the selected one.
+    fn draw_dock(&mut self, ui: &mut Ui, rect: Rect) {
+        const HEADER_HEIGHT: f32 = 48.0;
+        const HEADER_PADDING: f32 = 12.0;
+        let p = self.palette;
+        let painter = ui.painter().clone();
+        let top = rect.top() - 3.0;
+        let mut left = rect.left();
+        for (panel, label) in [(Panel::History, "History"), (Panel::Memory, "Memory")] {
+            let galley = painter.layout_no_wrap(
+                label.to_string(),
+                FontId::proportional(14.0),
+                Color32::PLACEHOLDER,
+            );
+            let header = Rect::from_min_size(
+                pos2(left, top),
+                vec2(galley.size().x + 2.0 * HEADER_PADDING, HEADER_HEIGHT),
+            );
+            left = header.right();
+            let response = ui.interact(header, Id::new("dock-tab").with(label), Sense::CLICK);
+            let pressed = response.is_pointer_button_down_on();
+            let hovered = response.hovered();
+            let (color, pipe) = if pressed {
+                (p.text_tertiary, p.accent_pressed)
+            } else if hovered {
+                (p.text_secondary, p.accent_hover)
+            } else {
+                (p.text, p.accent)
+            };
+            let text_pos = pos2(
+                header.left() + HEADER_PADDING,
+                header.center().y - galley.size().y / 2.0,
+            );
+            painter.galley(text_pos, galley, color);
+            if self.dock_tab == panel {
+                let pipe_rect = Rect::from_center_size(
+                    pos2(header.center().x, header.bottom() - 2.0 - 1.5),
+                    vec2(16.0, 3.0),
+                );
+                painter.rect_filled(pipe_rect, 1.5, pipe);
+            }
+            if response.clicked() && self.dock_tab != panel {
+                self.dock_tab = panel;
+                self.context_menu = None;
+            }
+        }
+        // `PivotItem` content has a 10 px top margin.
+        let content = rect.with_min_y(top + HEADER_HEIGHT + 10.0);
+        self.draw_list(ui, content, self.dock_tab, vec2(12.0, 8.0));
+    }
+
+    /// The history or memory list with its clear-all button, in a flyout or docked.
+    /// `empty_offset` places the message an empty list shows.
+    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, panel: Panel, empty_offset: egui::Vec2) {
+        let p = self.palette;
+        let painter = ui.painter();
+        let history = panel == Panel::History;
         // A menu whose item is gone (or that belongs to the other panel) closes.
         self.context_menu = self.context_menu.filter(|menu| match menu.target {
             MenuTarget::History(i) => history && i < self.calc.history().len(),
@@ -723,7 +825,7 @@ impl CalculatorApp {
                 "There's nothing saved in memory"
             };
             painter.text(
-                rect.left_top() + vec2(16.0, 16.0),
+                rect.left_top() + empty_offset,
                 Align2::LEFT_TOP,
                 message,
                 FontId::new(14.0, semibold()),
@@ -739,6 +841,7 @@ impl CalculatorApp {
         let mut action = None;
         ui.scope_builder(UiBuilder::new().max_rect(list), |ui| {
             egui::ScrollArea::vertical()
+                .id_salt(("list", history))
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -1457,6 +1560,8 @@ impl eframe::App for CalculatorApp {
             self.title_bar.apply(theme);
             self.title_bar_theme = Some(theme);
         }
+        self.docked =
+            self.mode == Mode::Standard && !self.compact && ui.max_rect().width() >= DOCK_WIDTH;
         match self.mode {
             _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
             Mode::DateCalculation => self.handle_date_keyboard(&ctx),
@@ -1486,21 +1591,34 @@ impl eframe::App for CalculatorApp {
             return;
         }
 
+        // A wide window docks history and memory on the right; the calculator keeps
+        // the rest. An open history or memory flyout turns into the docked tab.
+        let (main, dock) = if self.docked {
+            let width = (full.width() * 240.0 / DOCK_WIDTH).min(DOCK_MAX_WIDTH);
+            let main = full.with_max_x(full.right() - width);
+            (main, Some(full.with_min_x(main.right())))
+        } else {
+            (full, None)
+        };
+        if dock.is_some() && matches!(self.flyout, Flyout::History | Flyout::Memory) {
+            self.flyout = Flyout::None;
+        }
+
         let header_height = if self.compact {
             COMPACT_HEADER_HEIGHT
         } else {
             HEADER_HEIGHT
         };
         let memory_height = if self.compact { 0.0 } else { MEMORY_ROW_HEIGHT };
-        let header = Rect::from_min_size(full.min, vec2(full.width(), header_height));
-        let below = full.with_min_y(header.bottom());
+        let header = Rect::from_min_size(main.min, vec2(main.width(), header_height));
+        let below = main.with_min_y(header.bottom());
         let display_height = ((below.height() - memory_height) * 0.24).clamp(70.0, 220.0);
-        let display = Rect::from_min_size(below.min, vec2(full.width(), display_height));
+        let display = Rect::from_min_size(below.min, vec2(main.width(), display_height));
         let memory_row =
-            Rect::from_min_size(display.left_bottom(), vec2(full.width(), memory_height));
+            Rect::from_min_size(display.left_bottom(), vec2(main.width(), memory_height));
         let keypad = Rect::from_min_max(
             memory_row.left_bottom() + vec2(MARGIN, GAP),
-            full.max - vec2(MARGIN, MARGIN),
+            main.max - vec2(MARGIN, MARGIN),
         );
 
         self.draw_header(ui, header);
@@ -1513,15 +1631,25 @@ impl eframe::App for CalculatorApp {
                 {
                     self.flyout = Flyout::None;
                 }
-                self.draw_flyout(ui, below.with_min_y(display.bottom()));
+                let panel = if self.flyout == Flyout::History {
+                    Panel::History
+                } else {
+                    Panel::Memory
+                };
+                self.draw_flyout(ui, below.with_min_y(display.bottom()), panel);
             }
             Flyout::None | Flyout::Navigation => {
-                self.context_menu = None;
+                if dock.is_none() {
+                    self.context_menu = None;
+                }
                 if !self.compact {
                     self.draw_memory_row(ui, memory_row, now);
                 }
                 self.draw_keypad(ui, keypad, now);
             }
+        }
+        if let Some(dock) = dock {
+            self.draw_dock(ui, dock);
         }
         if self.flyout == Flyout::Navigation {
             self.draw_navigation(ui, full);
