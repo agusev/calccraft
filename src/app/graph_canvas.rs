@@ -217,10 +217,12 @@ impl CalculatorApp {
                 at = pointer.to_pos2();
                 ctx.set_cursor_icon(CursorIcon::None);
             }
-            let typing = ctx
+            // The arrow keys are the graph's only while it has the focus (`OnCoreKeyDown`)
+            // or nothing has: in a text box or on a slider or a button they're its own.
+            let graph_keys = ctx
                 .memory(|m| m.focused())
-                .is_some_and(|f| self.graphing.rows.iter().any(|r| edit_id(r.id) == f));
-            if !typing {
+                .is_none_or(|f| response.as_ref().is_some_and(|r| r.id == f));
+            if graph_keys {
                 if let Some(response) = &response
                     && response.has_focus()
                 {
@@ -349,13 +351,14 @@ impl CalculatorApp {
         let target = trace_at.or(pointer.map(|p| p.to_pos2()));
         let mut traced = None;
         if let (Some(target), Some(cache)) = (target, &self.graphing.cache) {
-            let pairs: Vec<(&Equation, &Plot)> = cache
+            // The row of each pair: `point.equation` counts the pairs, not the plots.
+            let (rows, pairs): (Vec<usize>, Vec<(&Equation, &Plot)>) = cache
                 .plots
                 .iter()
-                .filter_map(|(i, plot)| self.graphing.rows[*i].graphable().map(|e| (e, plot)))
-                .collect();
+                .filter_map(|(i, plot)| self.graphing.rows[*i].graphable().map(|e| (*i, (e, plot))))
+                .unzip();
             if let Some(point) = plot::trace(&pairs, &env, &view, w, h, target.x, target.y) {
-                let index = cache.plots[point.equation].0;
+                let index = rows[point.equation];
                 traced = Some((point, gp.equations[self.graphing.rows[index].color]));
             }
         }
@@ -916,6 +919,31 @@ mod tests {
         assert_eq!(x.to_string(), "3.82");
         assert_eq!(trace_text(x, x * x), "(3.82, 14.592400000000000)");
         assert_eq!(rounded(1234.0, 10.0), 1230.0);
+    }
+
+    #[test]
+    fn reparsed_equations_are_plotted_again() {
+        use crate::app::graphing_view::GraphingState;
+        use crate::graphing::Syntax;
+        let mut g = GraphingState::new();
+        // A decimal comma is an error in en-US, a number in de-DE.
+        g.rows[0].text = "y=1,5x".into();
+        g.submit(0, Syntax::default());
+        assert!(g.rows[0].graphable().is_none());
+        g.cache = Some(PlotCache {
+            key: CacheKey {
+                view: View::DEFAULT,
+                size: (100.0, 100.0),
+                angle: Angle::Radians,
+                rows: vec![(g.rows[0].id, g.rows[0].submitted.clone(), true)],
+                values: Vec::new(),
+            },
+            plots: Vec::new(),
+        });
+        g.reparse(Syntax::for_decimal(','));
+        assert!(g.rows[0].graphable().is_some());
+        // Same text, so the cache's key would match: it has to go.
+        assert!(g.cache.is_none());
     }
 
     #[test]

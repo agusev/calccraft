@@ -133,12 +133,9 @@ impl CalculatorApp {
         use GraphKey::*;
         let shift = self.graphing.shift;
         let first = |normal: GraphKey, second: GraphKey| if shift { second } else { normal };
-        let decimal: &'static str = if region_syntax().decimal == ',' {
-            ","
-        } else {
-            "."
-        };
-        let (root, log_base) = if region_syntax().separator == ';' {
+        let syntax = region_syntax();
+        let decimal: &'static str = if syntax.decimal == ',' { "," } else { "." };
+        let (root, log_base) = if syntax.separator == ';' {
             ("root(x;n)", "log(b; x)")
         } else {
             ("root(x,n)", "log(b, x)")
@@ -280,16 +277,9 @@ impl CalculatorApp {
                 text("(−)", sizes.digit * 0.8, FontFamily::Proportional),
                 tr("negateButton.AutomationName"),
             ),
-            (33, _) => (
-                text(
-                    if region_syntax().decimal == ',' {
-                        ","
-                    } else {
-                        "."
-                    },
-                    sizes.digit,
-                    FontFamily::Proportional,
-                ),
+            // The key types the region's separator, so it shows what it types.
+            (33, GraphKey::Type(decimal, ..)) => (
+                text(decimal, sizes.digit, FontFamily::Proportional),
                 tr("decimalSeparatorButton.AutomationName"),
             ),
             (_, GraphKey::Type(digit, ..)) => {
