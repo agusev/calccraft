@@ -929,7 +929,7 @@ fn subtle_fill(p: &Palette, response: &egui::Response) -> Color32 {
 }
 
 /// Shadow, background and border of a popup.
-fn popup_frame(p: &Palette, painter: &Painter, rect: Rect, fill: Color32) {
+pub(super) fn popup_frame(p: &Palette, painter: &Painter, rect: Rect, fill: Color32) {
     let shadow = Shadow {
         offset: [0, 8],
         blur: 24,

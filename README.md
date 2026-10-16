@@ -10,8 +10,10 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 ## Features
 
 - **Keypad:** digits, decimal point, `+/−`, `+ − × ÷`, `=`, `%`, `CE`, `C`, `⌫`, `1/x`, `x²`, `√x`.
-- **Memory:** `MC`, `MR`, `M+`, `M−`, `MS`, plus the memory list (`M˅`) with per-slot `MC` / `M+` / `M−`.
-- **History:** every calculation is logged. Click an entry to bring it back, or use the trash button to clear the list.
+- **Memory:** `MC`, `MR`, `M+`, `M−`, `MS`, plus the memory list (`M˅`) with per-slot `MC` / `M+` / `M−`,
+  also in each slot's right-click menu.
+- **History:** every calculation is logged. Click an entry to bring it back, right-click it to copy
+  or delete it, or use the trash button to clear the list.
 - **Keep on top:** a compact always-on-top window, the same as in Windows.
 - **Settings:** opened from the menu, as in Windows. It has the App theme choice, the app version,
   and links for sending feedback and to the project on GitHub.
@@ -23,7 +25,8 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 - **Windows behavior:** immediate execution without operator precedence (`2 + 3 × 4 = 20`),
   16 significant digits, Windows' rules for scientific notation, and the same error messages
   (`Cannot divide by zero`, `Result is undefined`, `Invalid input`, `Overflow`).
-- **Keyboard and clipboard:** see the shortcuts below. `Ctrl+C` / `Ctrl+V` copy and paste numbers.
+- **Keyboard and clipboard:** see the shortcuts below. `Ctrl+C` copies the result. `Ctrl+V` pastes
+  a number or a whole expression such as `12 + 5 =`, with the same checks as Windows.
 - **Date calculation mode** (open the ☰ menu):
   - **Difference between dates:** the difference broken into years, months, weeks and days,
     plus the total number of days (`4 years, 4 months, 4 days`, `1587 days`).
@@ -47,11 +50,11 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `F9` | Negate (`+/−`) |
 | `Backspace` | Delete the last digit |
 | `Delete` | Clear entry (`CE`) |
-| `Esc` | Clear (`C`), close an open panel, or leave Settings |
+| `Esc` | Clear (`C`), close an open menu or panel, or leave Settings |
 | `Ctrl+M` / `Ctrl+P` / `Ctrl+Q` / `Ctrl+R` / `Ctrl+L` | `MS` / `M+` / `M−` / `MR` / `MC` |
 | `Ctrl+H` | Show or hide history |
 | `Ctrl+Shift+D` | Clear history |
-| `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number |
+| `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number or an expression |
 
 In the date calculation mode, `Esc` closes the open calendar or list, and `Ctrl+C` copies the result.
 
@@ -113,9 +116,9 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/main.rs` | Entry point: window options |
 | `src/icon.rs` | The app icon, drawn in code: the window icon and the icon embedded in the executable |
 | `build.rs` | Embeds the icon and the version information (CalcCraft, version from `Cargo.toml`) into `calculator.exe` |
-| `src/engine.rs` | Calculator logic: input state machine, exact arithmetic, number formatting, memory, history, unit tests. No UI code. |
+| `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for a future Scientific mode), exact arithmetic, number formatting, paste, memory, history, unit tests. No UI code. |
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
-| `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels, menu, Settings, keyboard handling, fonts, title bar tint |
+| `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels with their context menus, menu, Settings, keyboard handling, fonts, title bar tint |
 | `src/app/palette.rs` | The dark and light color palettes |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
 | `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png` | The screenshots shown above |

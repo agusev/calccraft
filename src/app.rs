@@ -26,6 +26,7 @@ const ICON_DELETE: char = '\u{E74D}';
 const ICON_THEME: char = '\u{E790}';
 const ICON_HISTORY: char = '\u{E81C}';
 const ICON_CALENDAR: char = '\u{E787}';
+const ICON_COPY: char = '\u{E8C8}';
 const ICON_CALCULATOR: char = '\u{E8EF}';
 const ICON_MULTIPLY: char = '\u{E947}';
 const ICON_PLUS: char = '\u{E948}';
@@ -141,6 +142,8 @@ pub struct CalculatorApp {
     calc: Calculator,
     date: date_view::DateState,
     flyout: Flyout,
+    /// The right-click menu of a history or memory item, when open.
+    context_menu: Option<ContextMenu>,
     /// "Keep on top" mode: a small always-on-top window without the memory row.
     compact: bool,
     full_size: Option<egui::Vec2>,
@@ -185,6 +188,7 @@ impl CalculatorApp {
             calc: Calculator::default(),
             date: date_view::DateState::new(),
             flyout: Flyout::None,
+            context_menu: None,
             compact: false,
             full_size: None,
             has_icons,
@@ -270,6 +274,7 @@ impl CalculatorApp {
         } else {
             match key {
                 Key::Enter => Command::Equals,
+                Key::Escape if self.context_menu.is_some() => return self.context_menu = None,
                 Key::Escape if self.flyout != Flyout::None => return self.flyout = Flyout::None,
                 Key::Escape => Command::Clear,
                 Key::Delete => Command::ClearEntry,
@@ -686,6 +691,11 @@ impl CalculatorApp {
         ui.interact(rect, Id::new("flyout"), Sense::CLICK);
 
         let history = self.flyout == Flyout::History;
+        // A menu whose item is gone (or that belongs to the other panel) closes.
+        self.context_menu = self.context_menu.filter(|menu| match menu.target {
+            MenuTarget::History(i) => history && i < self.calc.history().len(),
+            MenuTarget::Memory(i) => !history && i < self.calc.memory().len(),
+        });
         let empty = if history {
             self.calc.history().is_empty()
         } else {
@@ -719,8 +729,8 @@ impl CalculatorApp {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     if history {
                         for i in 0..self.calc.history().len() {
-                            if self.history_item(ui, i) {
-                                action = Some(FlyoutAction::RecallHistory(i));
+                            if let Some(a) = self.history_item(ui, i) {
+                                action = Some(a);
                             }
                         }
                     } else {
@@ -741,7 +751,14 @@ impl CalculatorApp {
         if self.button(ui, trash, Id::new("trash"), Kind::Subtle, true, label) {
             action = Some(FlyoutAction::ClearAll);
         }
+        // Drawn last, so it covers the panel and catches the clicks outside it.
+        if let Some(menu) = self.context_menu {
+            action = self.draw_context_menu(ui, menu);
+        }
 
+        if action.is_some() {
+            self.context_menu = None;
+        }
         match action {
             Some(FlyoutAction::RecallHistory(i)) => {
                 self.calc.recall_history(i);
@@ -755,12 +772,22 @@ impl CalculatorApp {
             Some(FlyoutAction::MemoryClear(i)) => self.calc.memory_clear_item(i),
             Some(FlyoutAction::ClearAll) if history => self.calc.clear_history(),
             Some(FlyoutAction::ClearAll) => self.calc.execute(Command::MemoryClear),
-            None => {}
+            Some(FlyoutAction::OpenMenu(target, pos)) => {
+                self.context_menu = Some(ContextMenu { target, pos });
+            }
+            // Windows copies the result as the list shows it, with separators.
+            Some(FlyoutAction::CopyHistory(i)) => {
+                ui.ctx()
+                    .copy_text(format_number(&self.calc.history()[i].result));
+            }
+            Some(FlyoutAction::DeleteHistory(i)) => self.calc.delete_history_item(i),
+            Some(FlyoutAction::CloseMenu) | None => {}
         }
     }
 
-    /// History entry: small expression, large result. Returns `true` on click.
-    fn history_item(&self, ui: &mut Ui, index: usize) -> bool {
+    /// History entry: small expression, large result. A click recalls it and a
+    /// right click opens its menu.
+    fn history_item(&self, ui: &mut Ui, index: usize) -> Option<FlyoutAction> {
         let p = self.palette;
         let entry = &self.calc.history()[index];
         let width = ui.available_width();
@@ -796,7 +823,13 @@ impl CalculatorApp {
             result,
             p.text,
         );
-        response.clicked()
+        if response.secondary_clicked() {
+            let pos = response.interact_pointer_pos().unwrap_or(rect.center());
+            return Some(FlyoutAction::OpenMenu(MenuTarget::History(index), pos));
+        }
+        response
+            .clicked()
+            .then_some(FlyoutAction::RecallHistory(index))
     }
 
     /// Memory slot; on hover it shows MC, M+ and M− buttons.
@@ -829,6 +862,10 @@ impl CalculatorApp {
         let mut action = response
             .clicked()
             .then_some(FlyoutAction::RecallMemory(index));
+        if response.secondary_clicked() {
+            let pos = response.interact_pointer_pos().unwrap_or(rect.center());
+            action = Some(FlyoutAction::OpenMenu(MenuTarget::Memory(index), pos));
+        }
         if hovered {
             let buttons = [
                 ("MC", FlyoutAction::MemoryClear(index)),
@@ -853,6 +890,112 @@ impl CalculatorApp {
             }
         }
         action
+    }
+
+    /// The right-click menu of a history or memory item, a WinUI `MenuFlyout`
+    /// at the pointer. A click outside it closes it.
+    fn draw_context_menu(&self, ui: &Ui, menu: ContextMenu) -> Option<FlyoutAction> {
+        const ITEM_HEIGHT: f32 = 32.0;
+        const STRIDE: f32 = ITEM_HEIGHT + 2.0;
+        const ICON_CENTER: f32 = 20.0;
+        const TEXT_LEFT: f32 = 40.0;
+        let p = self.palette;
+        let full = ui.max_rect();
+        let backdrop = ui.interact(full, Id::new("context-menu-backdrop"), Sense::CLICK);
+
+        // The memory items show the Calculator font's MC, M+ and M− glyphs as text.
+        let items = match menu.target {
+            MenuTarget::History(i) => vec![
+                (
+                    self.icon(ICON_COPY, "⧉", 16.0),
+                    "Copy",
+                    FlyoutAction::CopyHistory(i),
+                ),
+                (
+                    self.icon(ICON_DELETE, "🗑", 16.0),
+                    "Delete",
+                    FlyoutAction::DeleteHistory(i),
+                ),
+            ],
+            MenuTarget::Memory(i) => vec![
+                (
+                    text("MC", 11.0, semibold()),
+                    "Clear memory item",
+                    FlyoutAction::MemoryClear(i),
+                ),
+                (
+                    text("M+", 11.0, semibold()),
+                    "Add to memory item",
+                    FlyoutAction::MemoryAdd(i, false),
+                ),
+                (
+                    text("M−", 11.0, semibold()),
+                    "Subtract from memory item",
+                    FlyoutAction::MemoryAdd(i, true),
+                ),
+            ],
+        };
+        let painter = ui.painter();
+        let font = FontId::proportional(14.0);
+        let text_width = items
+            .iter()
+            .map(|(_, label, _)| {
+                painter
+                    .layout_no_wrap(label.to_string(), font.clone(), p.text)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
+        let size = vec2(
+            (8.0 + TEXT_LEFT + text_width + 24.0).max(120.0),
+            8.0 + items.len() as f32 * STRIDE - 2.0,
+        );
+        // The menu opens down and to the right of the pointer, and flips where
+        // the window has no room for that.
+        let mut min = menu.pos;
+        if min.x + size.x > full.right() - 4.0 {
+            min.x = (min.x - size.x).max(full.left() + 4.0);
+        }
+        if min.y + size.y > full.bottom() - 4.0 {
+            min.y = (min.y - size.y).max(full.top() + 4.0);
+        }
+        let rect = Rect::from_min_size(min, size);
+        date_view::popup_frame(p, painter, rect, p.popup);
+        ui.interact(rect, Id::new("context-menu"), Sense::CLICK);
+
+        let mut chosen = None;
+        for (n, (icon, label, action)) in items.into_iter().enumerate() {
+            let item = Rect::from_min_size(
+                rect.min + vec2(4.0, 4.0 + n as f32 * STRIDE),
+                vec2(rect.width() - 8.0, ITEM_HEIGHT),
+            );
+            let response = ui.interact(item, Id::new("context-menu-item").with(n), Sense::CLICK);
+            let fill = if response.is_pointer_button_down_on() {
+                p.popup_item_pressed
+            } else if response.hovered() {
+                p.popup_item
+            } else {
+                Color32::TRANSPARENT
+            };
+            painter.rect_filled(item, RADIUS, fill);
+            let icon = painter.layout_job(icon);
+            let icon_pos = pos2(item.left() + ICON_CENTER, item.center().y) - icon.size() / 2.0;
+            painter.galley(icon_pos, icon, p.text);
+            painter.text(
+                pos2(item.left() + TEXT_LEFT, item.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                font.clone(),
+                p.text,
+            );
+            if response.clicked() {
+                chosen = Some(action);
+            }
+        }
+        if chosen.is_none() && (backdrop.clicked() || backdrop.secondary_clicked()) {
+            chosen = Some(FlyoutAction::CloseMenu);
+        }
+        chosen
     }
 
     // ------------------------------------------------------------------ menu
@@ -1239,6 +1382,24 @@ enum FlyoutAction {
     MemoryAdd(usize, bool),
     MemoryClear(usize),
     ClearAll,
+    OpenMenu(MenuTarget, Pos2),
+    CopyHistory(usize),
+    DeleteHistory(usize),
+    CloseMenu,
+}
+
+/// The item a context menu belongs to.
+#[derive(Clone, Copy)]
+enum MenuTarget {
+    History(usize),
+    Memory(usize),
+}
+
+/// An open context menu and where the right click was.
+#[derive(Clone, Copy)]
+struct ContextMenu {
+    target: MenuTarget,
+    pos: Pos2,
 }
 
 impl eframe::App for CalculatorApp {
@@ -1309,6 +1470,7 @@ impl eframe::App for CalculatorApp {
                 self.draw_flyout(ui, below.with_min_y(display.bottom()));
             }
             Flyout::None | Flyout::Navigation => {
+                self.context_menu = None;
                 if !self.compact {
                     self.draw_memory_row(ui, memory_row, now);
                 }

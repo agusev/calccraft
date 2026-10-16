@@ -43,9 +43,19 @@ src/app/date_view.rs     the date calculation mode's UI (a child module of app.r
 - `Calculator` is the whole state. The UI only calls `execute(Command)`, the memory and
   history methods, `paste`, and the read-only getters (`display`, `expression`, `is_enabled`,
   `memory`, `history`, `copy_text`).
-- Input is a small state machine (`Phase`): `Typing`, `Operand` (finished number, replaced
-  by the next digit), `AwaitingOperand` (operator just pressed) and `Result` (`=` just pressed).
-  Most behavior questions boil down to "what does this key do in each phase".
+- The engine is a port of the Windows Calculator's `CCalcEngine::ProcessCommandWorker`
+  (`CalcManager/CEngine/scicomm.cpp`) and `CHistoryCollector` (`History.cpp`). The fields keep
+  Windows' meaning, and their comments give the Windows names (`record` is `m_bRecord`,
+  `no_prev_equ` is `m_bNoPrevEqu`, …). To answer "what does this key do here", read the
+  matching branch of `ProcessCommandWorker`. Every command starts with `begin`, which finishes
+  the number being typed and remembers the last two commands (`last_key`, `this_key`).
+- `Calculator::default()` is the Standard mode (immediate execution).
+  `Calculator::with_precedence()` turns on Windows' precedence flag for the Scientific mode:
+  operator precedence, a stack of pending operations and parentheses, 25 levels each.
+- The expression line is a token list (`HistoryLine`). As in Windows, the text shown
+  (`shown`) only refreshes at certain steps, which is why `1 ÷ 0 =` keeps showing `1 ÷`.
+- `paste` checks the text with the rules of Windows' `CopyPasteManager` (`paste_is_valid`),
+  then types it in key by key.
 - Numbers are `BigRational` (`Number`). `normalize` checks every result for overflow and
   rounds results with huge denominators to 40 significant digits. `sqrt` is exact for
   perfect squares.
@@ -77,6 +87,9 @@ src/app/date_view.rs     the date calculation mode's UI (a child module of app.r
 - Keyboard: `char_command` handles text input (digits, operators), and `handle_key` handles
   named keys and `Ctrl` shortcuts. The date mode has its own `handle_date_keyboard`, so
   calculator keys do nothing there.
+- Right-clicking a history or memory item opens its context menu (`draw_context_menu`, state in
+  `context_menu`). It's drawn last in the panel over a full-window backdrop that closes it, like
+  the date mode's popups, and uses their `popup_*` colors and `popup_frame`.
 - `Mode` (`Standard`, `DateCalculation`) is picked in the ☰ menu (`draw_navigation`). `App::ui`
   hands the date mode over to `draw_date_mode` and returns early. `Page::Settings` replaces
   either mode, and going back returns to the mode that was open.
@@ -122,10 +135,24 @@ All of these were checked against the real Windows 11 Calculator. Don't "fix" th
   - `Overflow`: the decimal exponent goes beyond ±9999.
 
   In the error state only digits, `.`, `C`, `CE` and `⌫` work.
-- `CE` after `=` clears everything. `⌫` after `=` clears only the expression line.
+- `CE` after `=` clears the display and the expression line. `⌫` after `=` clears only the
+  expression line.
 
-When you change or add behavior, check it against the real calculator (`calc.exe`) first,
-then add or update a test in `engine.rs`.
+These follow from the Windows source and are pinned by tests too:
+
+- With precedence on: `2 + 3 × 4 =` → `14` with `2 + 3 × 4 =` in the expression line, and
+  `2 + 3 × 4 +` shows `14`. Changing `−` to `×` in `1 + 2 −` gives `(1 + 2) ×`. `=` closes all
+  open parentheses, and a number next to a parenthesis multiplies: `2(3)` → `6`.
+- The expression line writes subtraction as a hyphen: `9 - 4 =`.
+- `5 =` adds `5 =` to the history, and a finished function followed by a new number adds the
+  function (`√(4)`).
+- After `=`, `CE` keeps the last operation: `2 + 3 =`, `CE`, `=` gives `0 + 3 =` → `3`.
+- Pasted text is checked like in `CopyPasteManager`: at most 512 characters, 100 operands and
+  16 digits per operand. Invalid text shows `Invalid input`. Valid text is typed in after a
+  `CE`, so `12 + 5 =` gives `17`. Numbers in e-notation are rejected, a known difference.
+
+When you change or add behavior, check it against the real calculator (`calc.exe`) or its
+source first, then add or update a test in `engine.rs`.
 
 ### Date calculation
 
@@ -189,7 +216,8 @@ These come from the Windows Calculator source and are pinned by the tests in `da
 Unit tests don't cover the UI. After visual or interaction changes:
 
 1. Run the app (`cargo run`) and click through what you changed: hover, press, disabled
-   states (enter `1/0=` for the error state), the history and memory panels, the menu,
+   states (enter `1/0=` for the error state), the history and memory panels and their
+   right-click menus, the menu,
    keep-on-top mode, and resizing. Check both themes (Settings → App theme). In the date mode,
    check the page list, both date pickers with the month, year and decade views, the 0–999
    lists, `Esc`, and both a narrow (< 480 px) and a wide window.
