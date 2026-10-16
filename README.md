@@ -3,7 +3,9 @@
 Calculator; an open-source reimplementation of Calculator, rebuilt in pure Rust with [eframe/egui](https://github.com/emilk/egui).
 It looks like the original (Segoe UI fonts, Fluent icons, the same layout and colors) and behaves like it, down to how the expression line, `%`, repeated `=` and error messages work.
 
-![Screenshot of the calculator](docs/screenshot.png)
+| Dark | Light |
+| --- | --- |
+| ![The calculator in the dark theme](docs/screenshot.png) | ![The calculator in the light theme](docs/screenshot-light.png) |
 
 ## Features
 
@@ -11,8 +13,11 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 - **Memory:** `MC`, `MR`, `M+`, `M−`, `MS`, plus the memory list (`M˅`) with per-slot `MC` / `M+` / `M−`.
 - **History:** every calculation is logged. Click an entry to bring it back, or use the trash button to clear the list.
 - **Keep on top:** a compact always-on-top window, the same as in Windows.
-- **Settings:** opened from the menu, as in Windows. It has the App theme choice (Light, Dark or
-  Use system setting), the app version, and links for sending feedback and to the project on GitHub.
+- **Settings:** opened from the menu, as in Windows. It has the App theme choice, the app version,
+  and links for sending feedback and to the project on GitHub.
+- **Light and dark themes:** pick Light, Dark or Use system setting in Settings. With the system
+  setting, the app follows the Windows app mode, even when it changes while the app is open.
+  The title bar switches with it. The choice is saved in `%APPDATA%\CalcCraft`.
 - **Exact arithmetic:** numbers are stored as big rationals, so `0.1 + 0.2 − 0.3` is exactly `0`
   and `1 ÷ 3 × 3` is exactly `1`.
 - **Windows behavior:** immediate execution without operator precedence (`2 + 3 × 4 = 20`),
@@ -95,8 +100,9 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | --- | --- |
 | `src/main.rs` | Entry point: window options and the generated window icon |
 | `src/engine.rs` | Calculator logic: input state machine, exact arithmetic, number formatting, memory, history, unit tests. No UI code. |
-| `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels, menu, keyboard handling, fonts, title bar tint |
-| `docs/screenshot.png` | The screenshot shown above |
+| `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels, menu, Settings, keyboard handling, fonts, title bar tint |
+| `src/app/palette.rs` | The dark and light color palettes |
+| `docs/screenshot.png`, `docs/screenshot-light.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
 | `CLAUDE.md` | Entry point for Claude Code (imports `AGENTS.md`) |
@@ -104,9 +110,10 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 ## Differences from Windows Calculator
 
 - Only the Standard mode exists. Scientific, programmer, date and converter modes are not implemented.
-- The colors are fixed: the purple dark palette from the reference screenshot. Windows tints
-  its window with the Mica effect and your accent color. There is no light theme yet: the App
-  theme choice in Settings is not applied, and it is forgotten when the app closes.
+- The palettes are fixed: both themes use the purple tint and accent color of the reference
+  screenshots. Windows tints its window with the Mica effect and your own accent color.
+  The light background is an estimate, not a sample.
+- There is no high contrast theme.
 - The About section in Settings shows only the name and version, without the license and
   privacy links.
 - The text is always English, and numbers always use en-US formatting (`1,234.5`),
