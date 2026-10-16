@@ -1,5 +1,6 @@
 //! User interface styled after the Windows 11 calculator, in a dark or light theme.
 
+mod converter_view;
 mod date_view;
 mod palette;
 
@@ -13,6 +14,7 @@ use eframe::egui::{
     text::LayoutJob, vec2,
 };
 
+use crate::converter::Category;
 use crate::engine::{Calculator, Command, Func, Op, format_number};
 use palette::Palette;
 
@@ -37,6 +39,26 @@ const ICON_BACKSPACE: char = '\u{E94F}';
 const ICON_KEEP_ON_TOP: char = '\u{EE49}';
 const ICON_BACK_TO_FULL: char = '\u{EE47}';
 
+/// The converters' icons in the navigation menu. Windows draws Volume, Weight,
+/// Temperature, Speed, Data and Angle from the Calculator's own icon font, which
+/// may only be used inside Windows, so those use similar Segoe Fluent Icons glyphs.
+fn category_icon(category: Category) -> char {
+    match category {
+        Category::Volume => '\u{F158}',
+        Category::Length => '\u{ECC6}',
+        Category::Weight => '\u{E821}',
+        Category::Temperature => '\u{E9CA}',
+        Category::Energy => '\u{ECAD}',
+        Category::Area => '\u{E809}',
+        Category::Speed => '\u{E805}',
+        Category::Time => '\u{E917}',
+        Category::Power => '\u{E945}',
+        Category::Data => '\u{EDA2}',
+        Category::Pressure => '\u{EC4A}',
+        Category::Angle => '\u{F461}',
+    }
+}
+
 const HEADER_HEIGHT: f32 = 48.0;
 const COMPACT_HEADER_HEIGHT: f32 = 40.0;
 const MEMORY_ROW_HEIGHT: f32 = 30.0;
@@ -51,6 +73,8 @@ const REPOSITORY_URL: &str = "https://github.com/gavrilov/calccraft";
 const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
 /// Storage key and values of the theme choice, the same as Windows uses.
 const THEME_KEY: &str = "SelectedAppTheme";
+/// Storage key of the last converter and its units, the same as Windows uses.
+const CONVERTER_KEY: &str = "UnitConverterPreferences";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flyout {
@@ -65,15 +89,18 @@ enum Flyout {
 enum Mode {
     Standard,
     DateCalculation,
+    Converter(Category),
 }
 
 impl Mode {
-    const ALL: [Mode; 2] = [Mode::Standard, Mode::DateCalculation];
+    /// The modes of the menu's "Calculator" group; the converters follow.
+    const CALCULATORS: [Mode; 2] = [Mode::Standard, Mode::DateCalculation];
 
     fn title(self) -> &'static str {
         match self {
             Mode::Standard => "Standard",
             Mode::DateCalculation => "Date calculation",
+            Mode::Converter(category) => category.name(),
         }
     }
 }
@@ -141,6 +168,7 @@ pub struct CalculatorApp {
     mode: Mode,
     calc: Calculator,
     date: date_view::DateState,
+    converter: converter_view::ConverterState,
     flyout: Flyout,
     /// The right-click menu of a history or memory item, when open.
     context_menu: Option<ContextMenu>,
@@ -183,10 +211,15 @@ impl CalculatorApp {
             // Mipmaps keep the 64 px icon smooth at the 16 pt it is drawn at.
             TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
         );
+        let mut converter = converter_view::ConverterState::new();
+        if let Some(saved) = cc.storage.and_then(|s| s.get_string(CONVERTER_KEY)) {
+            converter.converter.restore_preferences(&saved);
+        }
         Self {
             mode: Mode::Standard,
             calc: Calculator::default(),
             date: date_view::DateState::new(),
+            converter,
             flyout: Flyout::None,
             context_menu: None,
             compact: false,
@@ -213,6 +246,10 @@ impl CalculatorApp {
         self.page = Page::Calculator;
         self.flyout = Flyout::None;
         self.date.close_popup();
+        self.converter.close_popup();
+        if let Mode::Converter(category) = mode {
+            self.converter.converter.set_category(category);
+        }
     }
 
     // -------------------------------------------------------------- keyboard
@@ -589,29 +626,7 @@ impl CalculatorApp {
         match command {
             Command::Digit(d) => text(&d.to_string(), digit_size, semibold()),
             Command::Decimal => text(".", digit_size, semibold()),
-            Command::Function(Func::Negate) => {
-                // "⁺∕₋": a small plus at the top, a minus at the bottom.
-                let small = text_size * 0.85;
-                let mut job = LayoutJob::default();
-                job.append(
-                    "+",
-                    0.0,
-                    TextFormat {
-                        valign: Align::TOP,
-                        ..format(small, regular.clone())
-                    },
-                );
-                job.append("∕", 0.0, format(text_size, regular.clone()));
-                job.append(
-                    "−",
-                    0.0,
-                    TextFormat {
-                        valign: Align::BOTTOM,
-                        ..format(small, regular)
-                    },
-                );
-                job
-            }
+            Command::Function(Func::Negate) => negate_label(text_size),
             Command::Function(Func::Reciprocal) => formula("¹⁄", ""),
             Command::Function(Func::Square) => formula("", "²"),
             Command::Function(Func::SquareRoot) => formula("²√", ""),
@@ -1000,9 +1015,9 @@ impl CalculatorApp {
 
     // ------------------------------------------------------------------ menu
 
-    fn draw_navigation(&mut self, ui: &Ui, rect: Rect) {
+    fn draw_navigation(&mut self, ui: &mut Ui, rect: Rect) {
         let p = self.palette;
-        let painter = ui.painter();
+        let painter = ui.painter().clone();
         painter.rect_filled(rect, 0.0, p.backdrop);
         let backdrop = ui.interact(rect, Id::new("nav-backdrop"), Sense::CLICK);
 
@@ -1025,30 +1040,55 @@ impl CalculatorApp {
         let label = self.icon(ICON_MENU, "≡", 16.0);
         let mut close = self.button(ui, menu, Id::new("nav-menu"), Kind::Subtle, true, label);
 
-        painter.text(
-            pos2(panel.left() + 16.0, panel.top() + HEADER_HEIGHT + 8.0),
-            Align2::LEFT_TOP,
-            "Calculator",
-            FontId::new(14.0, semibold()),
-            p.text,
+        // The modes in two groups. They scroll between the header and Settings
+        // when the window is too short for all of them.
+        let list = Rect::from_min_max(
+            pos2(panel.left(), panel.top() + HEADER_HEIGHT),
+            pos2(panel.right(), panel.bottom() - 58.0),
         );
-        for (i, mode) in Mode::ALL.into_iter().enumerate() {
-            let item = Rect::from_min_size(
-                pos2(
-                    panel.left() + 4.0,
-                    panel.top() + HEADER_HEIGHT + 34.0 + i as f32 * 40.0,
-                ),
-                vec2(panel.width() - 8.0, 40.0),
-            );
-            let icon = match mode {
-                Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
-                Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
-            };
-            let id = Id::new("nav-mode").with(i);
-            if self.nav_item(ui, item, id, icon, mode.title(), self.mode == mode) {
-                self.set_mode(mode);
-                close = true;
-            }
+        let groups = [
+            ("Calculator", Mode::CALCULATORS.to_vec()),
+            ("Converter", Category::ALL.map(Mode::Converter).to_vec()),
+        ];
+        let mut chosen = None;
+        ui.scope_builder(UiBuilder::new().max_rect(list), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("nav-modes")
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (title, modes) in groups {
+                        let size = vec2(ui.available_width(), 34.0);
+                        let (header, _) = ui.allocate_exact_size(size, Sense::hover());
+                        ui.painter().text(
+                            pos2(header.left() + 16.0, header.top() + 8.0),
+                            Align2::LEFT_TOP,
+                            title,
+                            FontId::new(14.0, semibold()),
+                            p.text,
+                        );
+                        for mode in modes {
+                            let size = vec2(ui.available_width(), 40.0);
+                            let (row, _) = ui.allocate_exact_size(size, Sense::hover());
+                            let item = row.shrink2(vec2(4.0, 0.0));
+                            let icon = match mode {
+                                Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
+                                Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
+                                Mode::Converter(category) => {
+                                    self.icon(category_icon(category), "▫", 16.0)
+                                }
+                            };
+                            let id = Id::new("nav-mode").with(mode.title());
+                            if self.nav_item(ui, item, id, icon, mode.title(), self.mode == mode) {
+                                chosen = Some(mode);
+                            }
+                        }
+                    }
+                });
+        });
+        if let Some(mode) = chosen {
+            self.set_mode(mode);
+            close = true;
         }
 
         // Settings sits at the bottom of the pane, below a separator, as in Windows.
@@ -1405,6 +1445,7 @@ struct ContextMenu {
 impl eframe::App for CalculatorApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(THEME_KEY, self.theme.key().to_owned());
+        storage.set_string(CONVERTER_KEY, self.converter.converter.preferences());
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
@@ -1416,10 +1457,11 @@ impl eframe::App for CalculatorApp {
             self.title_bar.apply(theme);
             self.title_bar_theme = Some(theme);
         }
-        if self.page == Page::Calculator && self.mode == Mode::DateCalculation {
-            self.handle_date_keyboard(&ctx);
-        } else {
-            self.handle_keyboard(&ctx);
+        match self.mode {
+            _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
+            Mode::DateCalculation => self.handle_date_keyboard(&ctx),
+            Mode::Converter(_) => self.handle_converter_keyboard(&ctx),
+            Mode::Standard => self.handle_keyboard(&ctx),
         }
         let now = ctx.input(|i| i.time);
 
@@ -1430,10 +1472,14 @@ impl eframe::App for CalculatorApp {
             return;
         }
 
-        if self.mode == Mode::DateCalculation {
+        if self.mode != Mode::Standard {
             let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
             self.draw_header(ui, header);
-            self.draw_date_mode(ui, full, header.bottom());
+            if self.mode == Mode::DateCalculation {
+                self.draw_date_mode(ui, full, header.bottom());
+            } else {
+                self.draw_converter_mode(ui, full, header.bottom());
+            }
             if self.flyout == Flyout::Navigation {
                 self.draw_navigation(ui, full);
             }
@@ -1489,6 +1535,16 @@ fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
 }
 
+/// Segoe UI Light, for the converter value that isn't being typed into.
+fn light() -> FontFamily {
+    FontFamily::Name("light".into())
+}
+
+/// Segoe UI Symbol, for the pictures of the converters' everyday comparisons.
+fn symbols() -> FontFamily {
+    FontFamily::Name("symbols".into())
+}
+
 fn icons() -> FontFamily {
     FontFamily::Name("icons".into())
 }
@@ -1500,6 +1556,31 @@ fn text(text: &str, size: f32, family: FontFamily) -> LayoutJob {
         FontId::new(size, family),
         Color32::PLACEHOLDER,
     )
+}
+
+/// The `±` key's label, "⁺∕₋": a small plus at the top, a minus at the bottom.
+fn negate_label(size: f32) -> LayoutJob {
+    let regular = FontFamily::Proportional;
+    let small = size * 0.85;
+    let mut job = LayoutJob::default();
+    job.append(
+        "+",
+        0.0,
+        TextFormat {
+            valign: Align::TOP,
+            ..format(small, regular.clone())
+        },
+    );
+    job.append("∕", 0.0, format(size, regular.clone()));
+    job.append(
+        "−",
+        0.0,
+        TextFormat {
+            valign: Align::BOTTOM,
+            ..format(small, regular)
+        },
+    );
+    job
 }
 
 /// Format of one piece of a label; vertically centered by default.
@@ -1670,6 +1751,8 @@ fn setup_fonts(ctx: &Context) -> bool {
     };
     let regular = load("segoeui.ttf").map(|d| add("segoe", d));
     let semibold_font = load("seguisb.ttf").map(|d| add("segoe-semibold", d));
+    let light_font = load("segoeuil.ttf").map(|d| add("segoe-light", d));
+    let symbol_font = load("seguisym.ttf").map(|d| add("segoe-symbol", d));
     let icon_font = load("SegoeIcons.ttf")
         .or_else(|| load("segmdl2.ttf"))
         .map(|d| add("icons", d));
@@ -1683,6 +1766,8 @@ fn setup_fonts(ctx: &Context) -> bool {
     let family =
         |first: Option<String>| first.into_iter().chain(fallback.iter().cloned()).collect();
     fonts.families.insert(semibold(), family(semibold_font));
+    fonts.families.insert(light(), family(light_font));
+    fonts.families.insert(symbols(), family(symbol_font));
     fonts.families.insert(icons(), family(icon_font));
 
     ctx.set_fonts(fonts);

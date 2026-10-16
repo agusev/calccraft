@@ -871,7 +871,14 @@ fn paragraph(
 
 /// An item of a drop-down list: highlighted when hovered or selected, with
 /// the accent pill on the selected one. Returns `true` when clicked.
-fn list_item(p: &Palette, ui: &Ui, id: Id, rect: Rect, label: &str, selected: bool) -> bool {
+pub(super) fn list_item(
+    p: &Palette,
+    ui: &Ui,
+    id: Id,
+    rect: Rect,
+    label: &str,
+    selected: bool,
+) -> bool {
     let response = ui.interact(rect, id, Sense::CLICK);
     let fill = if response.is_pointer_button_down_on() {
         p.popup_item_pressed

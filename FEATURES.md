@@ -44,12 +44,12 @@ own `NOT_STARTED` entry.
 | **Phase 3: Scientific Calculator Mode** | 8 | 0 | 0 | 0 | 8 |
 | **Phase 4: Programmer Calculator Mode** | 7 | 0 | 0 | 0 | 7 |
 | **Phase 5: Date Calculation** | 4 | 4 | 0 | 0 | 0 |
-| **Phase 6: Unit Conversion (13 categories)** | 14 | 0 | 0 | 0 | 14 |
+| **Phase 6: Unit Conversion (13 categories)** | 14 | 13 | 0 | 0 | 1 |
 | **Phase 7: Graphing Calculator** | 6 | 0 | 0 | 0 | 6 |
-| **Phase 8: Application Shell, UX & Accessibility** | 10 | 4 | 0 | 0 | 6 |
-| **TOTAL** | **64** | **23** | **0** | **0** | **41** |
+| **Phase 8: Application Shell, UX & Accessibility** | 10 | 5 | 0 | 0 | 5 |
+| **TOTAL** | **64** | **37** | **0** | **0** | **27** |
 
-*Last updated: 2026-10-15 (CalcCraft 0.1.2)*
+*Last updated: 2026-10-15 (CalcCraft 0.2.0)*
 
 ---
 
@@ -73,7 +73,8 @@ graph TD
    powers, logarithms.
 4. **Phase 4: Programmer mode**: word sizes, radixes, bitwise logic, shifts, rotations, bit keypad.
 5. **Phase 5: Date calculation** (`src/dates.rs`, `src/app/date_view.rs`). *Done.*
-6. **Phase 6: Unit converters**: conversion factors, currency rates, everyday comparisons.
+6. **Phase 6: Unit converters** (`src/converter.rs`, `src/app/converter_view.rs`): 12 converters
+   with Windows' units, factors and rounding. *Done, except the Currency converter.*
 7. **Phase 7: Graphing mode**: expression parser, plotting, variable sliders, graph analysis.
 8. **Phase 8: Shell & system**: navigation, theming, layouts, hotkeys, accessibility, localization.
 
@@ -551,107 +552,141 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
 ---
 
 ### Phase 6: Unit Conversion (13 categories)
-*Converters with live two-way conversion.*
+*Converters with live two-way conversion. In CalcCraft the logic is `src/converter.rs` (no UI
+code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 
-> **Rust notes for the whole phase:** take the units and factors from Windows'
-> `src/Calculator.ViewModels/DataLoaders/UnitConverterDataLoader.cs` (units in `AddUnit`, factors in
-> the conversion table) instead of typing them from memory. Exact factors fit `BigRational`;
-> temperature needs offsets. The unit lists below leave out the everyday comparison units that
-> the same file defines (paperclips, bananas, whales, …): those belong to `FEAT-SHELL-004`.
+> **Rust notes for the whole phase:** the units, their order, the default units per region and
+> the factors are copied from Windows' `src/Calculator.ViewModels/DataLoaders/UnitConverterDataLoader.cs`.
+> Windows converts with `double` and rounds the result with its own rules, so `converter.rs` uses
+> `f64` rather than `BigRational`: that way the digits match Windows. The everyday comparison units
+> that the same file defines (paperclips, bananas, whales, …) are in their own tables
+> (`*_COMPARISONS`) and only appear in the "About equal to" results (`FEAT-SHELL-004`).
 
 #### `FEAT-CONV-001` Core Unit Converter Pipeline & Two-Way Binding
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-CORE-001`
-- **Windows ref:** `src/CalcManager/UnitConverter.cpp`, `src/Calculator.ViewModels/UnitConverterViewModel.cs`
+- **Windows ref:** `src/CalcManager/UnitConverter.cpp`, `src/CalcManager/NumberFormattingUtils.cpp`,
+  `src/Calculator.ViewModels/UnitConverterViewModel.cs`, `src/Calculator/Views/UnitConverter.xaml`
+- **Rust:** `src/converter.rs` (`Converter`, `Region`), `src/app/converter_view.rs`
 - **Description:** Converts between a source and a target unit; either field can be the active one; converter keypad.
 - **Acceptance Criteria:**
-  - Precision is kept across very large and very small factors.
-  - Categories that don't support negative values disable `±` (Temperature, Power and Angle allow negatives).
+  - Results are rounded like Windows: at least 7 significant digits (more when more were typed,
+    up to 15), 15 decimals below 0.000001, and scientific notation (`8.000000e+24`) beyond 15
+    integer digits or below 1e-14. Up to 15 characters can be typed, the minus sign included.
+  - Clicking the other value makes it the active one (shown in semibold). Its value stays until
+    the next key, which starts a new number. A new source unit also makes the next key start over.
+  - Categories that don't support negative values hide `±` (Temperature, Power and Angle allow negatives).
+  - The default units depend on the Windows region, as in Windows: regions with US customary units
+    convert from metric units (centimeters → inches), the others to them, and Fahrenheit regions
+    start at Celsius → Fahrenheit.
+  - Each category keeps its units while the app runs. The last category and its units are saved
+    as `UnitConverterPreferences`.
+  - Keyboard: digits, `.` or `,`, `Backspace`, `Delete` (`CE`), `F9` or `-` (`±`). `Ctrl+C`
+    copies the active value, and `Ctrl+V` pastes a number with Windows' checks (one plain number,
+    at most 16 characters). Invalid text shows `Invalid input` in both fields.
+  - A unit drop-down opens with the selected unit over its picker; `Esc` or a click outside closes it.
+  - In a landscape window the keypad sits next to the values, and from 640 px on the values, the
+    unit pickers and the keys get larger, as in `UnitConverter.xaml`.
+- **Differences:** the unit lists don't wrap around (Windows uses a looping `CarouselPanel`).
+  The "About equal to" results under the values are `FEAT-SHELL-004`.
 
 #### `FEAT-CONV-002` Length Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`LENGTH`)
 - **Units:** Ångströms, Nanometers, Microns, Millimeters, Centimeters, Meters, Kilometers, Inches, Feet, Yards, Miles, Nautical miles.
 - **Acceptance Criteria:** 5 kilometers = 3.106856 miles.
 
 #### `FEAT-CONV-003` Volume Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`VOLUME`)
 - **Units:** Milliliters, Cubic centimeters, Liters, Cubic meters, Cubic inches, Cubic feet, Cubic yards, Cups (US), and Teaspoons, Tablespoons, Fluid ounces, Pints, Quarts and Gallons, each in a US and a UK version.
 - **Acceptance Criteria:** 1 US gallon = 3.785412 liters.
 
 #### `FEAT-CONV-004` Weight and Mass Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`WEIGHT`)
 - **Units:** Carats, Milligrams, Centigrams, Decigrams, Grams, Decagrams, Hectograms, Kilograms, Metric tonnes, Ounces, Pounds, Stone, Short tons (US), Long tons (UK).
 - **Acceptance Criteria:** 1 kilogram = 2.204623 pounds.
 
 #### `FEAT-CONV-005` Temperature Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`TEMPERATURE`: ratio, offset and order per pair, as in Windows)
 - **Units:** Celsius, Fahrenheit, Kelvin. Negative values allowed.
 - **Acceptance Criteria:** 0 °C = 32 °F = 273.15 K.
 
 #### `FEAT-CONV-006` Energy Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`ENERGY`)
 - **Units:** Electron volts, Joules, Kilojoules, Thermal calories, Food calories, Foot-pounds, British thermal units, Kilowatt-hours.
 - **Acceptance Criteria:** 1 food calorie = 4,184 joules.
 
 #### `FEAT-CONV-007` Area Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
-- **Units:** Square millimeters, Square centimeters, Square meters, Hectares, Square kilometers, Square inches, Square feet, Square yards, Acres, Square miles, Pyeong.
+- **Rust:** `src/converter.rs` (`AREA`)
+- **Units:** Square millimeters, Square centimeters, Square meters, Hectares, Square kilometers, Square inches, Square feet, Square yards, Acres, Square miles, and Pyeong in the Japan, Korea and Taiwan regions.
 - **Acceptance Criteria:** 1 acre = 43,560 square feet.
 
 #### `FEAT-CONV-008` Speed Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`SPEED`)
 - **Units:** Centimeters per second, Meters per second, Kilometers per hour, Feet per second, Miles per hour, Knots, Mach.
-- **Acceptance Criteria:** 1 Mach = 1,225.08 km/h (Windows defines Mach as 340.3 m/s).
+- **Acceptance Criteria:** 1 Mach = 1,225.08 km/h (Windows defines Mach as 340.3 m/s). Windows'
+  factors also make a mile per hour 44.7 cm/s and a knot 51.44 cm/s, so 1 mph shows 1.6092 km/h.
 
 #### `FEAT-CONV-009` Time Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`TIME`)
 - **Units:** Microseconds, Milliseconds, Seconds, Minutes, Hours, Days, Weeks, Years.
 - **Acceptance Criteria:** 1 week = 168 hours = 10,080 minutes.
 
 #### `FEAT-CONV-010` Power Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`POWER`)
 - **Units:** Watts, Kilowatts, Horsepower, Foot-pounds per minute, BTUs per minute. Negative values allowed.
 - **Acceptance Criteria:** 1 horsepower = 745.6999 watts.
 
 #### `FEAT-CONV-011` Data Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`DATA`)
 - **Units:** Bits, Nibbles, Bytes, and the decimal (kilo, mega, giga, tera, peta, exa, zetta, yotta) and binary (kibi … yobi) bit and byte units.
 - **Acceptance Criteria:** 1 KB = 1,000 bytes and 1 KiB = 1,024 bytes are kept apart.
 
 #### `FEAT-CONV-012` Pressure Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`PRESSURE`)
 - **Units:** Atmospheres, Bars, Kilopascals, Millimeters of mercury, Pascals, Pounds per square inch.
 - **Acceptance Criteria:** 1 atmosphere = 101,325 pascals = 14.69595 psi.
 
 #### `FEAT-CONV-013` Angle Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
+- **Rust:** `src/converter.rs` (`ANGLE`)
 - **Units:** Degrees, Radians, Gradians. Negative values allowed.
-- **Acceptance Criteria:** 180° = π radians = 200 gradians.
+- **Acceptance Criteria:** 180° = π radians = 200 gradians (π shows as 3.141593).
 
 #### `FEAT-CONV-014` Currency Converter
 - **Status:** `[ ] NOT_STARTED`
@@ -664,7 +699,8 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
   - Without a connection, the cached rates are used.
 - **Rust notes:** Windows uses a Microsoft-internal rate service. CalcCraft needs its own source,
   an HTTP client and a cache file next to the settings (`%APPDATA%\CalcCraft`). Pick a source
-  whose terms allow this use before writing code.
+  whose terms allow this use before writing code. In Windows, Currency is the first converter in
+  the menu; `Category` in `src/converter.rs` and `UnitConverterDataLoader.cs` show where it goes.
 
 ---
 
@@ -743,13 +779,17 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
 - **Depends On:** None
 - **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs`, `src/Calculator/Views/MainPage.xaml`
 - **Rust:** `src/app.rs` (`Mode`, `draw_navigation`, `nav_item`, `set_mode`)
-- **Description:** The ☰ menu lists the modes under a **Calculator** heading, with Settings at the bottom.
+- **Description:** The ☰ menu lists the modes under a **Calculator** and a **Converter** heading,
+  with Settings at the bottom. The list scrolls when the window is too short for it.
 - **Acceptance Criteria:**
   - Switching modes keeps each mode's state; the selected mode has the accent pill.
   - Every new mode adds itself to `Mode` and to the menu.
 - **Differences:** Windows lists 18 modes: Standard, Scientific, Graphing, Programmer, Date
-  calculation, and 13 converters under a **Converter** heading. CalcCraft lists only the
-  implemented modes (Standard, Date calculation). The Alt hotkeys are `FEAT-SHELL-010`.
+  calculation, and 13 converters. CalcCraft lists only the implemented modes (Standard, Date
+  calculation and 12 converters, without Currency). Windows draws six converter icons (Volume,
+  Weight, Temperature, Speed, Data, Angle) from the Calculator's own icon font, whose license
+  limits it to Windows; CalcCraft uses similar Segoe Fluent Icons glyphs. The Alt hotkeys are
+  `FEAT-SHELL-010`.
 
 #### `FEAT-SHELL-002` Adaptive Layouts (docked panels)
 - **Status:** `[ ] NOT_STARTED`
@@ -761,8 +801,9 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
   - In wide windows, history and memory dock in a side panel with tabs (`FEAT-STD-003` uses flyouts only).
   - Converters switch between vertical and horizontal layouts.
   - Nothing clips or overlaps at the minimum window size.
-- **Already there:** the keypad and fonts scale with the window, and the date page switches result
-  sizes at 480 px.
+- **Already there:** the keypad and fonts scale with the window, the date page switches result
+  sizes at 480 px, and the converters switch to the horizontal layout in landscape windows and to
+  larger sizes from 640 px.
 
 #### `FEAT-SHELL-003` App Theme & Color Palettes
 - **Status:** `[x] COMPLETED`
@@ -778,12 +819,24 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
   tint and accent, and the light background is an estimate. There is no high contrast theme.
 
 #### `FEAT-SHELL-004` Supplementary Results (everyday comparisons)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CONV-001`
-- **Windows ref:** `src/Calculator/Views/SupplementaryResults.xaml`
-- **Description:** "About 3.5 bathtubs" style comparisons under converter results.
-- **Acceptance Criteria:** they update with the converted value.
+- **Windows ref:** `src/Calculator/Views/SupplementaryResults.xaml`, `DelighterUnitStyles.xaml`,
+  `src/Calculator/Controls/HorizontalNoOverflowStackPanel.cs`, `UnitConverter::CalculateSuggested`
+- **Rust:** `src/converter.rs` (`Converter::suggestions`, `*_COMPARISONS`), `src/app/converter_view.rs` (`draw_suggestions`)
+- **Description:** "About equal to" under the converter values: the value in the category's
+  other units, then the best everyday comparison ("👋 5.36 hands").
+- **Acceptance Criteria:**
+  - They update with the converted value. The other units come closest to 1 first (by the size
+    of log10), rounded to 2 decimals below 100, 1 below 1,000 and none above; results that round
+    to 0 are left out, except in Temperature, Power and Angle.
+  - The everyday comparison is the one closest to 1 that isn't 0, shown with its Segoe UI Symbol
+    picture. Temperature, Time, Pressure and Angle have none.
+  - Results stay on one line: those that don't fit are skipped (a narrower one after them can
+    still fit), and with more than two results the room for the comparison at the end is kept.
+- **Differences:** for negative values Windows sorts by the log10 of a negative number (NaN),
+  so its order is undefined; CalcCraft sorts by the absolute value.
 
 #### `FEAT-SHELL-005` Keyboard Focus Navigation
 - **Status:** `[ ] NOT_STARTED`
@@ -875,6 +928,8 @@ Windows source in `../win-calculator`.
 
 | Date | Agent / Contributor | Feature ID | Change Description |
 | :--- | :--- | :--- | :--- |
-| 2026-10-16 | Antigravity AI | ALL | Created initial comprehensive tracking matrix & specifications |
-| 2026-10-16 | Claude Code | ALL | Rewrote for the Rust implementation (CalcCraft 0.1.2): marked 20 completed features with their Rust modules and differences; split the gaps into `FEAT-STD-007` and `FEAT-SHELL-010`; added `FEAT-SHELL-008` (Settings) and `FEAT-SHELL-009` (app identity); fixed the standalone `%` result (0), the mode count (18), the Alt hotkey order, the converter unit lists and the Mach factor (from `UnitConverterDataLoader.cs`) and the source paths; replaced the `dotnet` commands with `cargo` ones |
+| 2026-10-15 | Antigravity AI | ALL | Created initial comprehensive tracking matrix & specifications |
+| 2026-10-15 | Claude Code | ALL | Rewrote for the Rust implementation (CalcCraft 0.1.2): marked 20 completed features with their Rust modules and differences; split the gaps into `FEAT-STD-007` and `FEAT-SHELL-010`; added `FEAT-SHELL-008` (Settings) and `FEAT-SHELL-009` (app identity); fixed the standalone `%` result (0), the mode count (18), the Alt hotkey order, the converter unit lists and the Mach factor (from `UnitConverterDataLoader.cs`) and the source paths; replaced the `dotnet` commands with `cargo` ones |
 | 2026-10-15 | Claude Code | `FEAT-CORE-003`, `FEAT-CORE-004`, `FEAT-STD-007` | Ported `CCalcEngine` and `CHistoryCollector` to `src/engine.rs` with the precedence flag (operator precedence, parentheses, precedence inversion brackets), completing `FEAT-CORE-005` and `FEAT-CORE-007` for precedence mode; added Windows' paste validation and key-by-key expression paste, and the history and memory context menus |
+| 2026-10-15 | Claude Code | `FEAT-CONV-001`–`FEAT-CONV-013` | Added the 12 offline unit converters: `src/converter.rs` ports `UnitConverter`, the units, factors and region defaults of `UnitConverterDataLoader.cs` and the field logic of `UnitConverterViewModel.cs`; `src/app/converter_view.rs` draws `UnitConverter.xaml` (portrait and landscape). Updated `FEAT-SHELL-001` (Converter menu group) and `FEAT-SHELL-002`; Currency (`FEAT-CONV-014`) stays open |
+| 2026-10-15 | Claude Code | `FEAT-SHELL-004` | Added the converters' "About equal to" results: `Converter::suggestions` ports `CalculateSuggested` with the everyday comparison units of `UnitConverterDataLoader.cs`, and `draw_suggestions` lays them out like `SupplementaryResults.xaml` and `HorizontalNoOverflowStackPanel` |

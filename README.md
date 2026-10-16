@@ -36,6 +36,17 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 
 ![Screenshot of the date calculation mode](docs/date-calculation.png)
 
+- **Unit converters** (under Converter in the ☰ menu): Volume, Length, Weight and mass,
+  Temperature, Energy, Area, Speed, Time, Power, Data, Pressure and Angle.
+  - Windows' units and conversion factors, and its rounding (at least 7 significant digits).
+  - Type into either value; click the other one to convert the other way.
+  - "About equal to" shows the value in other units and an everyday comparison, like
+    `5.36 hands` for a meter.
+  - The default units follow your Windows region, as in Windows (inches and pounds in the US,
+    centimeters and kilograms elsewhere). The last converter's units are remembered.
+
+![Screenshot of the Length converter](docs/unit-converter.png)
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -58,10 +69,15 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 
 In the date calculation mode, `Esc` closes the open calendar or list, and `Ctrl+C` copies the result.
 
+In the converters, the digits, `.` or `,`, `Backspace` and `Delete` (`CE`) work as above,
+`F9` or `-` changes the sign (Temperature, Power and Angle only), `Ctrl+C` copies the active
+value, `Ctrl+V` pastes a number, and `Esc` closes an open unit list.
+
 ## Requirements
 
-- **Windows 10 or 11.** The app was developed and tested on Windows 11. It loads Segoe UI and
-  Segoe Fluent Icons (or Segoe MDL2 Assets on Windows 10) from `%WINDIR%\Fonts`.
+- **Windows 10 or 11.** The app was developed and tested on Windows 11. It loads Segoe UI
+  (regular, semibold and light), Segoe UI Symbol and Segoe Fluent Icons (or Segoe MDL2 Assets
+  on Windows 10) from `%WINDIR%\Fonts`.
   Other platforms should build, using egui's default fonts and a plain title bar, but nobody
   has tested them.
 - **Rust 1.95 or newer** (edition 2024; eframe 0.36 needs at least 1.95).
@@ -118,18 +134,23 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `build.rs` | Embeds the icon and the version information (CalcCraft, version from `Cargo.toml`) into `calculator.exe` |
 | `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for a future Scientific mode), exact arithmetic, number formatting, paste, memory, history, unit tests. No UI code. |
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
+| `src/converter.rs` | Unit converter logic: a port of the Windows converter with its units, factors, rounding and region defaults; paste; unit tests. No UI code. |
 | `src/app.rs` | User interface: custom-painted buttons, display, memory row, history and memory panels with their context menus, menu, Settings, keyboard handling, fonts, title bar tint |
 | `src/app/palette.rs` | The dark and light color palettes |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
-| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png` | The screenshots shown above |
+| `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
+| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
 | `CLAUDE.md` | Entry point for Claude Code (imports `AGENTS.md`) |
 
 ## Differences from Windows Calculator
 
-- Only the Standard and Date calculation modes exist. The scientific, graphing, programmer and
-  converter modes are not implemented.
+- The Standard and Date calculation modes and 12 of the 13 converters exist. The scientific,
+  graphing and programmer modes and the Currency converter are not implemented.
+- Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle)
+  are similar Segoe Fluent Icons glyphs: Windows draws them from the Calculator's own icon font,
+  which can't be used outside Windows.
 - Dates always use the Gregorian calendar, en-US formats (`October 15, 2026`) and weeks that
   start on Sunday, whatever the system settings.
 - The palettes are fixed: both themes use the purple tint and accent color of the reference

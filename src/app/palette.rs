@@ -67,6 +67,10 @@ pub(super) struct Palette {
     pub control_hover: Color32,
     pub control_pressed: Color32,
     pub control_border: Color32,
+    /// The unit pickers of the converters dim their text when hovered and pressed
+    /// (WinUI's BaseMediumHigh and BaseMedium: text at 80 % and 60 %).
+    pub unit_hover: Color32,
+    pub unit_pressed: Color32,
 }
 
 /// `color` at `opacity` over `base`, as an opaque color.
@@ -152,6 +156,8 @@ pub(super) const DARK: Palette = Palette {
     control_hover: white(DARK_BACKGROUND, 0.082),
     control_pressed: white(DARK_BACKGROUND, 0.031),
     control_border: Color32::from_rgb(0x44, 0x36, 0x44),
+    unit_hover: white(DARK_BACKGROUND, 0.8),
+    unit_pressed: white(DARK_BACKGROUND, 0.6),
 };
 
 pub(super) const LIGHT: Palette = Palette {
@@ -207,6 +213,8 @@ pub(super) const LIGHT: Palette = Palette {
     control_hover: white(LIGHT_BACKGROUND, 0.5),
     control_pressed: white(LIGHT_BACKGROUND, 0.3),
     control_border: black(LIGHT_BACKGROUND, 0.0578),
+    unit_hover: black(LIGHT_BACKGROUND, 0.8),
+    unit_pressed: black(LIGHT_BACKGROUND, 0.6),
 };
 
 #[cfg(test)]
