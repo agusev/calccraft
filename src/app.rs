@@ -351,6 +351,7 @@ impl CalculatorApp {
         self.mode = mode;
         self.page = Page::Calculator;
         self.flyout = Flyout::None;
+        self.context_menu = None;
         self.date.close_popup();
         self.converter.close_popup();
         if let Mode::Converter(category) = mode {
