@@ -1,5 +1,7 @@
 //! User interface styled after the Windows 11 calculator (dark theme).
 
+mod date_view;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,12 +34,16 @@ const TEXT_PRESSED: Color32 = Color32::from_rgb(0xCF, 0xC8, 0xCF);
 const TEXT_SECONDARY: Color32 = Color32::from_rgb(0xC5, 0xBE, 0xC5);
 const TEXT_DISABLED: Color32 = Color32::from_rgb(0x6C, 0x62, 0x6D);
 const TEXT_ON_ACCENT: Color32 = Color32::from_rgb(0x1A, 0x0F, 0x1B);
+const NAV_PANEL: Color32 = Color32::from_rgb(0x35, 0x2A, 0x38);
+const NAV_ITEM: Color32 = Color32::from_rgb(0x3D, 0x31, 0x41);
+const NAV_ITEM_HOVER: Color32 = Color32::from_rgb(0x44, 0x38, 0x48);
 
 // Glyphs from the Segoe Fluent Icons / Segoe MDL2 Assets fonts.
 const ICON_MENU: char = '\u{E700}';
 const ICON_CHEVRON_DOWN: char = '\u{E70D}';
 const ICON_DELETE: char = '\u{E74D}';
 const ICON_HISTORY: char = '\u{E81C}';
+const ICON_CALENDAR: char = '\u{E787}';
 const ICON_CALCULATOR: char = '\u{E8EF}';
 const ICON_MULTIPLY: char = '\u{E947}';
 const ICON_PLUS: char = '\u{E948}';
@@ -58,6 +64,22 @@ const COMPACT_SIZE: egui::Vec2 = vec2(320.0, 394.0);
 /// How long (in seconds) a button looks pressed after its keyboard key is pressed.
 const KEY_FLASH: f64 = 0.1;
 
+/// Calculator mode, picked in the navigation menu.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Standard,
+    DateCalculation,
+}
+
+impl Mode {
+    fn title(self) -> &'static str {
+        match self {
+            Mode::Standard => "Standard",
+            Mode::DateCalculation => "Date calculation",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flyout {
     None,
@@ -77,7 +99,9 @@ enum Kind {
 }
 
 pub struct CalculatorApp {
+    mode: Mode,
     calc: Calculator,
+    date: date_view::DateState,
     flyout: Flyout,
     /// "Keep on top" mode: a small always-on-top window without the memory row.
     compact: bool,
@@ -95,7 +119,9 @@ impl CalculatorApp {
         #[cfg(windows)]
         tint_title_bar(cc);
         Self {
+            mode: Mode::Standard,
             calc: Calculator::default(),
+            date: date_view::DateState::new(),
             flyout: Flyout::None,
             compact: false,
             full_size: None,
@@ -183,6 +209,12 @@ impl CalculatorApp {
         } else {
             flyout
         };
+    }
+
+    fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.flyout = Flyout::None;
+        self.date.close_popup();
     }
 
     fn set_compact(&mut self, ctx: &Context, compact: bool) {
@@ -317,10 +349,14 @@ impl CalculatorApp {
         let title = ui.painter().text(
             pos2(rect.left() + 48.0, y),
             Align2::LEFT_CENTER,
-            "Standard",
+            self.mode.title(),
             FontId::new(20.0, semibold()),
             TEXT,
         );
+        // Keep on top and history exist only in the Standard mode.
+        if self.mode != Mode::Standard {
+            return;
+        }
 
         let label = self.icon(ICON_KEEP_ON_TOP, "⇲", 14.0);
         let keep_on_top = icon_button(title.right() + 26.0);
@@ -738,9 +774,9 @@ impl CalculatorApp {
 
         let panel = Rect::from_min_size(
             rect.min,
-            vec2((rect.width() * 0.85).min(280.0), rect.height()),
+            vec2((rect.width() * 0.85).min(256.0), rect.height()),
         );
-        painter.rect_filled(panel, 0.0, FLYOUT);
+        painter.rect_filled(panel, 0.0, NAV_PANEL);
         painter.vline(
             panel.right(),
             panel.y_range(),
@@ -762,38 +798,47 @@ impl CalculatorApp {
             FontId::new(14.0, semibold()),
             TEXT,
         );
-        // The only mode is "Standard", and it is selected.
-        let item = Rect::from_min_size(
-            pos2(panel.left() + 4.0, panel.top() + HEADER_HEIGHT + 34.0),
-            vec2(panel.width() - 8.0, 40.0),
-        );
-        let response = ui.interact(item, Id::new("nav-standard"), Sense::CLICK);
-        painter.rect_filled(
-            item,
-            RADIUS,
+        let modes = [
+            (Mode::Standard, ICON_CALCULATOR, "▦"),
+            (Mode::DateCalculation, ICON_CALENDAR, "▤"),
+        ];
+        for (i, (mode, glyph, fallback)) in modes.into_iter().enumerate() {
+            let item = Rect::from_min_size(
+                pos2(
+                    panel.left() + 4.0,
+                    panel.top() + HEADER_HEIGHT + 37.0 + i as f32 * 40.0,
+                ),
+                vec2(panel.width() - 8.0, 40.0),
+            );
+            let response = ui.interact(item, Id::new("nav-mode").with(i), Sense::CLICK);
+            let selected = self.mode == mode;
             if response.hovered() {
-                OPERATOR_HOVER
-            } else {
-                SUBTLE_HOVER
-            },
-        );
-        let pill =
-            Rect::from_center_size(pos2(item.left() + 2.0, item.center().y), vec2(3.0, 16.0));
-        painter.rect_filled(pill, 2.0, ACCENT);
-        let icon = painter.layout_job(self.icon(ICON_CALCULATOR, "▦", 16.0));
-        painter.galley(
-            pos2(item.left() + 16.0, item.center().y - icon.size().y / 2.0),
-            icon,
-            TEXT,
-        );
-        painter.text(
-            pos2(item.left() + 48.0, item.center().y),
-            Align2::LEFT_CENTER,
-            "Standard",
-            FontId::proportional(14.0),
-            TEXT,
-        );
-        close |= response.clicked();
+                painter.rect_filled(item, RADIUS, NAV_ITEM_HOVER);
+            } else if selected {
+                painter.rect_filled(item, RADIUS, NAV_ITEM);
+            }
+            if selected {
+                let pill = Rect::from_center_size(
+                    pos2(item.left() + 2.0, item.center().y),
+                    vec2(3.0, 16.0),
+                );
+                painter.rect_filled(pill, 2.0, ACCENT);
+            }
+            let icon = painter.layout_job(self.icon(glyph, fallback, 16.0));
+            let icon_pos = pos2(item.left() + 20.0, item.center().y) - icon.size() / 2.0;
+            painter.galley(icon_pos, icon, TEXT);
+            painter.text(
+                pos2(item.left() + 45.0, item.center().y),
+                Align2::LEFT_CENTER,
+                mode.title(),
+                FontId::proportional(14.0),
+                TEXT,
+            );
+            if response.clicked() {
+                self.set_mode(mode);
+                close = true;
+            }
+        }
 
         painter.text(
             pos2(panel.left() + 16.0, panel.bottom() - 16.0),
@@ -821,11 +866,22 @@ enum FlyoutAction {
 impl eframe::App for CalculatorApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.handle_keyboard(&ctx);
-        let now = ctx.input(|i| i.time);
-
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, BACKGROUND);
+
+        if self.mode == Mode::DateCalculation {
+            self.handle_date_keyboard(&ctx);
+            let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
+            self.draw_header(ui, header);
+            self.draw_date_mode(ui, full, header.bottom());
+            if self.flyout == Flyout::Navigation {
+                self.draw_navigation(ui, full);
+            }
+            return;
+        }
+
+        self.handle_keyboard(&ctx);
+        let now = ctx.input(|i| i.time);
 
         let header_height = if self.compact {
             COMPACT_HEADER_HEIGHT
