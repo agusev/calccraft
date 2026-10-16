@@ -997,7 +997,8 @@ impl CalculatorApp {
                 rect.left_top() + empty_offset,
                 Align2::LEFT_TOP,
                 message,
-                FontId::new(14.0, semibold()),
+                // `BodyTextBlockStyle`: regular, not semibold.
+                FontId::proportional(14.0),
                 p.text,
             );
             return;
