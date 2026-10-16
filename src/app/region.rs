@@ -193,12 +193,12 @@ mod windows {
     use windows_sys::Win32::Foundation::{LPARAM, SYSTEMTIME};
     pub(super) use windows_sys::Win32::Globalization::{DATE_LONGDATE, DATE_YEARMONTH};
     use windows_sys::Win32::Globalization::{
-        EnumSystemLocalesEx, GetDateFormatEx, GetLocaleInfoEx, GetUserDefaultLocaleName,
-        LOCALE_ICALENDARTYPE, LOCALE_IFIRSTDAYOFWEEK, LOCALE_RETURN_NUMBER,
-        LOCALE_SABBREVMONTHNAME1, LOCALE_SDECIMAL, LOCALE_SGROUPING, LOCALE_SLIST,
-        LOCALE_SLONGDATE, LOCALE_SNATIVECOUNTRYNAME, LOCALE_SNATIVEDISPLAYNAME,
-        LOCALE_SNATIVELANGUAGENAME, LOCALE_SPECIFICDATA, LOCALE_SSCRIPTS, LOCALE_SSHORTESTDAYNAME1,
-        LOCALE_STHOUSAND,
+        DATE_USE_ALT_CALENDAR, EnumSystemLocalesEx, GetDateFormatEx, GetLocaleInfoEx,
+        GetUserDefaultLocaleName, LOCALE_ICALENDARTYPE, LOCALE_IFIRSTDAYOFWEEK,
+        LOCALE_IOPTIONALCALENDAR, LOCALE_RETURN_NUMBER, LOCALE_SABBREVMONTHNAME1, LOCALE_SDECIMAL,
+        LOCALE_SGROUPING, LOCALE_SLIST, LOCALE_SLONGDATE, LOCALE_SNATIVECOUNTRYNAME,
+        LOCALE_SNATIVEDISPLAYNAME, LOCALE_SNATIVELANGUAGENAME, LOCALE_SPECIFICDATA,
+        LOCALE_SSCRIPTS, LOCALE_SSHORTESTDAYNAME1, LOCALE_STHOUSAND,
     };
 
     use super::{DateFormats, Formats};
@@ -209,16 +209,24 @@ mod windows {
         /// The zero-terminated locale name, or `None` for the user's own locale, which
         /// includes the changes made to it in Windows Settings.
         name: Option<Vec<u16>>,
+        /// `DATE_USE_ALT_CALENDAR` where the dates need the locale's alternate calendar
+        /// to be Gregorian (see `load`), else 0.
+        calendar: u32,
         /// The date pickers' pattern, zero-terminated.
         pub picker_pattern: Vec<u16>,
     }
 
     impl Locale {
-        fn named(name: &str) -> Self {
+        fn new(name: Option<Vec<u16>>) -> Self {
             Self {
-                name: Some(wide(name)),
+                name,
+                calendar: 0,
                 picker_pattern: Vec::new(),
             }
+        }
+
+        fn named(name: &str) -> Self {
+            Self::new(Some(wide(name)))
         }
 
         fn name(&self) -> *const u16 {
@@ -284,7 +292,7 @@ mod windows {
             let length = unsafe {
                 GetDateFormatEx(
                     self.name(),
-                    flags,
+                    flags | self.calendar,
                     &time,
                     pattern,
                     buffer.as_mut_ptr(),
@@ -316,10 +324,7 @@ mod windows {
         {
             Some(name) => (Locale::named(&name), name),
             None => (
-                Locale {
-                    name: None,
-                    picker_pattern: Vec::new(),
-                },
+                Locale::new(None),
                 user_locale().unwrap_or_else(|| "en-US".into()),
             ),
         };
@@ -341,6 +346,29 @@ mod windows {
             5 => Weekday::Sat,
             _ => Weekday::Sun,
         };
+        // The date mode only knows the Gregorian calendar: the calendar's year and decade
+        // views count chrono's years. Where the locale's calendar is another one (th-TH's
+        // Thai Buddhist calendar, or the Japanese era picked in Windows Settings),
+        // GetDateFormatEx writes its years (2569), so the dates take the alternate calendar
+        // when that one is Gregorian, and are English otherwise. Windows can't be asked
+        // for the Gregorian calendar directly: it ignores `th-TH-u-ca-gregory`.
+        let gregorian = |setting| {
+            locale
+                .number(setting)
+                .is_some_and(|calendar| GREGORIAN.contains(&calendar))
+        };
+        if !gregorian(LOCALE_ICALENDARTYPE) {
+            if !gregorian(LOCALE_IOPTIONALCALENDAR) {
+                return Some(Formats {
+                    tag,
+                    numbers,
+                    list_separator: format!("{list} "),
+                    first_day,
+                    ..Formats::english()
+                });
+            }
+            locale.calendar = DATE_USE_ALT_CALENDAR;
+        }
         // The shortest day names start with Monday too.
         let monday_first: Vec<String> = (0..7)
             .map(|i| locale.info(LOCALE_SSHORTESTDAYNAME1 + i))
@@ -460,6 +488,32 @@ mod windows {
             assert_eq!(de.date(date), "15. Oktober 2026");
             assert_eq!(de.first_day, Weekday::Mon);
             assert_eq!(de.list_separator, "; ");
+        }
+
+        /// The calendar's year and decade views count Gregorian years, so every date is
+        /// Gregorian, also where the region's calendar isn't (Windows would write 2569 in
+        /// th-TH and the Hijri year 1448 in ar-SA).
+        #[test]
+        fn other_calendars_show_gregorian_dates() {
+            let date = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
+            // th-TH's alternate calendar is the Gregorian one: `วันที่ 15 ตุลาคม 2026`,
+            // `วันพฤหัสบดีที่ 15 ตุลาคม 2026` (the picker without an apostrophe).
+            let th = load(Some("th-TH")).unwrap();
+            for text in [th.date(date), th.long_date(date), th.year_month(date)] {
+                assert!(
+                    text.ends_with("ตุลาคม 2026") && !text.contains('\''),
+                    "{text}"
+                );
+            }
+            // ar-SA has none: its dates are English, its other formats stay.
+            let sa = load(Some("ar-SA")).unwrap();
+            assert_eq!(sa.date(date), "October 15, 2026");
+            assert_eq!(sa.long_date(date), "Thursday, October 15, 2026");
+            assert_eq!(sa.year_month(date), "October 2026");
+            assert_eq!(sa.months[0], "Jan");
+            assert_eq!(sa.weekdays[0], "Su");
+            assert_eq!(sa.tag, "ar-SA");
+            assert_eq!(sa.list_separator, "; ");
         }
 
         #[test]
