@@ -157,6 +157,21 @@ pub(super) fn tr(key: &str) -> &'static str {
     strings().get(key)
 }
 
+/// A translated format string with `%1`, `%2`, … replaced by `args`, the way the
+/// Windows Calculator fills them in with `FormatMessage`.
+pub(super) fn tr_format(key: &str, args: &[&str]) -> String {
+    format_message(tr(key), args)
+}
+
+fn format_message(format: &str, args: &[&str]) -> String {
+    let mut text = format.to_string();
+    // From the highest number down, so `%1` doesn't match the start of `%10`.
+    for (i, arg) in args.iter().enumerate().rev() {
+        text = text.replace(&format!("%{}", i + 1), arg);
+    }
+    text
+}
+
 /// A unit's name in the drop-down lists (`key` is `Unit::key`).
 pub(super) fn unit_name(key: &str) -> &'static str {
     tr(&format!("UnitName_{key}"))
@@ -296,6 +311,15 @@ mod tests {
         assert_eq!(match_language("hi-IN"), None);
         // Not translated.
         assert_eq!(match_language("xx-YY"), None);
+    }
+
+    #[test]
+    fn format_strings() {
+        assert_eq!(format_message("Display is %1", &["5"]), "Display is 5");
+        assert_eq!(
+            format_message("%1 %2", &["Length", "Converter"]),
+            "Length Converter"
+        );
     }
 
     #[test]

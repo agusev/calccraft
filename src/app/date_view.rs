@@ -5,12 +5,15 @@
 use chrono::{Datelike, Days, Local, Months, NaiveDate};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, Id, Key, MouseWheelUnit, Painter, Pos2,
-    Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, epaint::Shadow, pos2, text::LayoutJob, vec2,
+    Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetType, epaint::Shadow, pos2,
+    text::LayoutJob, vec2,
 };
 
 use super::{
-    CalculatorApp, Flyout, ICON_CALENDAR, ICON_CHEVRON_DOWN, RADIUS, palette::Palette,
-    radio_button, semibold, strings::tr,
+    CalculatorApp, Flyout, ICON_CALENDAR, ICON_CHEVRON_DOWN, RADIUS, access,
+    palette::Palette,
+    radio_button, semibold,
+    strings::{tr, tr_format},
 };
 use crate::dates::{self, MAX_DATE, MAX_OFFSET, MIN_DATE};
 
@@ -74,6 +77,17 @@ enum DateField {
     To,
     /// The "From" date of "Add or subtract days".
     Start,
+}
+
+impl DateField {
+    /// The caption above the date picker, which also names it.
+    fn header(self) -> &'static str {
+        tr(match self {
+            DateField::From => "DateDiff_FromHeader.Header",
+            DateField::To => "DateDiff_ToHeader.Header",
+            DateField::Start => "AddSubtract_Date_FromHeader.Header",
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -164,6 +178,10 @@ impl DateState {
     /// Closes an open drop-down or calendar. Returns `false` if none was open.
     pub(super) fn close_popup(&mut self) -> bool {
         self.popup.take().is_some()
+    }
+
+    pub(super) fn popup_open(&self) -> bool {
+        self.popup.is_some()
     }
 
     /// The main result line; Ctrl+C copies it.
@@ -282,7 +300,10 @@ impl CalculatorApp {
                 let (result, in_days) =
                     dates::describe_difference(self.date.from, self.date.to, &words());
                 let pos = pos2(left, content + 197.0);
+                let name = tr_format("Date_DifferenceResultAutomationName", &[&result]);
                 let bottom = paragraph(p, &painter, pos, result, result_size, wrap_width);
+                let rect = Rect::from_min_max(pos, pos2(pos.x + wrap_width, bottom));
+                access::text(ui, rect, Id::new("date-result"), &name, true);
                 if let Some(in_days) = in_days {
                     caption(p, &painter, pos2(left, bottom + 8.0), &in_days);
                 }
@@ -346,14 +367,11 @@ impl CalculatorApp {
                 let date_label = labels + 22.0 + CONTROL_HEIGHT + 35.0;
                 caption(p, &painter, pos2(left, date_label), tr("DateLabel.Text"));
                 let pos = pos2(left, date_label + 20.0);
-                paragraph(
-                    p,
-                    &painter,
-                    pos,
-                    self.date.result_text(),
-                    result_size,
-                    wrap_width,
-                );
+                let result = self.date.result_text();
+                let name = tr_format("Date_ResultingDateAutomationName", &[&result]);
+                let bottom = paragraph(p, &painter, pos, result, result_size, wrap_width);
+                let rect = Rect::from_min_max(pos, pos2(pos.x + wrap_width, bottom));
+                access::text(ui, rect, Id::new("date-result"), &name, true);
             }
         }
 
@@ -375,7 +393,10 @@ impl CalculatorApp {
             pos2(text_pos.x - 12.0, text_pos.y),
             vec2(12.0 + label.size().x + 38.0, CONTROL_HEIGHT),
         );
-        let response = ui.interact(rect, Id::new("date-page"), Sense::CLICK);
+        let name = tr("DateCalculationOption.AutomationName");
+        let info = access::combo_box(name, self.date.page.title());
+        let id = Id::new("date-page");
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
         painter.rect_filled(rect, RADIUS, subtle_fill(p, &response));
         let label_pos = pos2(text_pos.x, rect.center().y - label.size().y / 2.0);
         painter.galley(label_pos, label, p.text);
@@ -388,6 +409,7 @@ impl CalculatorApp {
         );
         if response.clicked() {
             self.date.popup = Some(Popup::Pages);
+            self.opened_from(ui.ctx(), id);
         }
         rect
     }
@@ -397,13 +419,16 @@ impl CalculatorApp {
         let p = self.palette;
         let date = self.date.date(field);
         let painter = ui.painter();
-        let label =
-            painter.layout_no_wrap(dates::format_date(date), FontId::proportional(14.0), p.text);
+        let text = dates::format_date(date);
+        let label = painter.layout_no_wrap(text.clone(), FontId::proportional(14.0), p.text);
         let rect = Rect::from_min_size(
             pos2(text_pos.x - 12.0, text_pos.y),
             vec2(12.0 + label.size().x + 36.0, CONTROL_HEIGHT),
         );
-        let response = ui.interact(rect, Id::new("date-picker").with(field), Sense::CLICK);
+        // Windows' date pickers are named by their headers.
+        let info = access::combo_box(field.header(), &text);
+        let id = Id::new("date-picker").with(field);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
         painter.rect_filled(rect, RADIUS, subtle_fill(p, &response));
         let glyph_center = pos2(text_pos.x + label.size().x + 16.0, rect.center().y);
         painter.galley(
@@ -420,13 +445,17 @@ impl CalculatorApp {
                 view: CalendarView::Month,
                 shown: first_of_month(date),
             });
+            self.opened_from(ui.ctx(), id);
         }
     }
 
     /// A years, months or days box; a click opens the 0–999 list.
     fn draw_offset_combo(&mut self, ui: &Ui, field: Offset, rect: Rect) {
         let p = self.palette;
-        let response = ui.interact(rect, Id::new("date-offset").with(field), Sense::CLICK);
+        let value = self.date.offset(field).to_string();
+        let id = Id::new("date-offset").with(field);
+        let info = access::combo_box(field.label(), &value);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
         let fill = if response.is_pointer_button_down_on() {
             p.control_pressed
         } else if response.hovered() {
@@ -445,7 +474,7 @@ impl CalculatorApp {
         painter.text(
             pos2(rect.left() + 12.0, rect.center().y),
             Align2::LEFT_CENTER,
-            self.date.offset(field).to_string(),
+            value,
             FontId::proportional(14.0),
             p.text,
         );
@@ -458,6 +487,7 @@ impl CalculatorApp {
                 anchor: rect,
                 scroll_pending: true,
             });
+            self.opened_from(ui.ctx(), id);
         }
     }
 
@@ -474,6 +504,7 @@ impl CalculatorApp {
         }
         // A click anywhere outside the popup closes it ("light dismiss").
         let backdrop = ui.interact(full, Id::new("date-popup-backdrop"), Sense::CLICK);
+        access::set_covered(ui.ctx(), false);
         match popup {
             Popup::Pages => self.draw_page_list(ui, full, selector),
             Popup::Calendar {
@@ -516,7 +547,9 @@ impl CalculatorApp {
                 vec2(rect.width() - 8.0, ITEM_HEIGHT),
             );
             let id = Id::new("date-page-item").with(i);
-            if list_item(p, ui, id, item, page.title(), page == self.date.page) {
+            let selected = page == self.date.page;
+            let focus = self.take_popup_focus(selected);
+            if list_item(p, ui, id, item, page.title(), selected, focus) {
                 self.date.page = page;
                 self.date.popup = None;
             }
@@ -561,7 +594,9 @@ impl CalculatorApp {
                     let (row, _) = ui.allocate_exact_size(size, Sense::hover());
                     let item = row.shrink2(vec2(0.0, 1.0));
                     let id = Id::new("date-offset-item").with(value);
-                    if list_item(p, ui, id, item, &value.to_string(), value == selected) {
+                    let focus = self.take_popup_focus(value == selected);
+                    let label = value.to_string();
+                    if list_item(p, ui, id, item, &label, value == selected, focus) {
                         chosen = Some(value as u32);
                     }
                 }
@@ -628,10 +663,6 @@ impl CalculatorApp {
             CalendarView::Year => Some(CalendarView::Decade),
             CalendarView::Decade => None,
         };
-        let id = Id::new("calendar-title");
-        if flat_button(p, ui, id, title_button, zoom_out.is_some()) {
-            action = zoom_out.map(|view| CalendarAction::Show(view, shown));
-        }
         let title = match view {
             CalendarView::Month => shown.format("%B %Y").to_string(),
             CalendarView::Year => shown.year().to_string(),
@@ -640,6 +671,10 @@ impl CalculatorApp {
                 format!("{start} - {}", start + 9)
             }
         };
+        let id = Id::new("calendar-title");
+        if flat_button(p, ui, id, title_button, zoom_out.is_some(), &title) {
+            action = zoom_out.map(|view| CalendarAction::Show(view, shown));
+        }
         painter.text(
             pos2(title_button.left() + 8.0, title_button.center().y),
             Align2::LEFT_CENTER,
@@ -648,16 +683,29 @@ impl CalculatorApp {
             p.text,
         );
 
+        // WinUI's own names for the arrows, which aren't in the Calculator's resources.
         let arrows = [
-            (ICON_CARET_UP, "▲", false, rect.right() - 1.5 * arrow_width),
-            (ICON_CARET_DOWN, "▼", true, rect.right() - 0.5 * arrow_width),
+            (
+                ICON_CARET_UP,
+                "▲",
+                false,
+                rect.right() - 1.5 * arrow_width,
+                "Previous",
+            ),
+            (
+                ICON_CARET_DOWN,
+                "▼",
+                true,
+                rect.right() - 0.5 * arrow_width,
+                "Next",
+            ),
         ];
-        for (glyph, fallback, forward, x) in arrows {
+        for (glyph, fallback, forward, x, name) in arrows {
             let target = step_page(view, shown, forward);
             let button =
                 Rect::from_center_size(pos2(x, rect.top() + 24.0), vec2(arrow_width - 4.0, 40.0));
             let id = Id::new("calendar-arrow").with(forward);
-            if flat_button(p, ui, id, button, target.is_some()) {
+            if flat_button(p, ui, id, button, target.is_some(), name) {
                 action = target.map(|shown| CalendarAction::Show(view, shown));
             }
             let color = if target.is_some() {
@@ -673,7 +721,7 @@ impl CalculatorApp {
             );
         }
 
-        // The mouse wheel flips pages too.
+        // The mouse wheel flips pages too, and so do Page Up and Page Down.
         if ui.rect_contains_pointer(rect) {
             self.date.wheel += ui.input(|i| wheel_delta(&i.events));
             if self.date.wheel.abs() >= WHEEL_STEP {
@@ -684,6 +732,13 @@ impl CalculatorApp {
                 }
             }
         }
+        for (key, forward) in [(Key::PageUp, false), (Key::PageDown, true)] {
+            if ui.input(|i| i.key_pressed(key))
+                && let Some(shown) = step_page(view, shown, forward)
+            {
+                action = Some(CalendarAction::Show(view, shown));
+            }
+        }
 
         let body = Rect::from_min_max(
             pos2(rect.left() + 8.0, header.bottom()),
@@ -691,10 +746,16 @@ impl CalculatorApp {
         );
         let today = today();
         let selected = self.date.date(field);
+        // Opened with the keyboard, the calendar focuses the selected date.
+        let cells = Cells {
+            today,
+            selected,
+            focus: self.take_popup_focus(true),
+        };
         let picked = match view {
-            CalendarView::Month => month_view(p, ui, &painter, body, shown, today, selected),
-            CalendarView::Year => year_view(p, ui, body, shown, today, selected),
-            CalendarView::Decade => decade_view(p, ui, body, shown, today, selected),
+            CalendarView::Month => month_view(p, ui, &painter, body, shown, cells),
+            CalendarView::Year => year_view(p, ui, body, shown, cells),
+            CalendarView::Decade => decade_view(p, ui, body, shown, cells),
         };
         action = picked.or(action);
 
@@ -716,6 +777,15 @@ impl CalculatorApp {
     }
 }
 
+/// What the calendar's cells need to know: today, the selected date, and whether the
+/// selected cell takes the keyboard focus (a calendar opened with the keyboard).
+#[derive(Clone, Copy)]
+struct Cells {
+    today: NaiveDate,
+    selected: NaiveDate,
+    focus: bool,
+}
+
 /// Days of a month: 6 weeks starting on Sunday, with neighbor months dimmed.
 fn month_view(
     p: &Palette,
@@ -723,8 +793,7 @@ fn month_view(
     painter: &Painter,
     body: Rect,
     shown: NaiveDate,
-    today: NaiveDate,
-    selected: NaiveDate,
+    cells: Cells,
 ) -> Option<CalendarAction> {
     let column = body.width() / 7.0;
     for (i, name) in WEEKDAYS.iter().enumerate() {
@@ -758,12 +827,15 @@ fn month_view(
             vec2(column, CALENDAR_ROW_HEIGHT),
         );
         let state = CellState {
-            today: day == today,
-            selected: day == selected,
+            today: day == cells.today,
+            selected: day == cells.selected,
             dimmed: day.month() != shown.month(),
+            focus: cells.focus && day == cells.selected,
         };
         let id = Id::new("calendar-day").with(i);
-        if calendar_cell(p, ui, id, cell, &day.day().to_string(), state) {
+        // Screen readers get the whole date, not just the day of the month.
+        let label = day.day().to_string();
+        if calendar_cell(p, ui, id, cell, &label, &dates::format_date(day), state) {
             action = Some(CalendarAction::Pick(day));
         }
     }
@@ -776,8 +848,7 @@ fn year_view(
     ui: &Ui,
     body: Rect,
     shown: NaiveDate,
-    today: NaiveDate,
-    selected: NaiveDate,
+    cells: Cells,
 ) -> Option<CalendarAction> {
     let january = NaiveDate::from_ymd_opt(shown.year(), 1, 1)?;
     let mut action = None;
@@ -788,13 +859,16 @@ fn year_view(
         }
         let same_month = |date: NaiveDate| first_of_month(date) == month;
         let state = CellState {
-            today: same_month(today),
-            selected: same_month(selected),
+            today: same_month(cells.today),
+            selected: same_month(cells.selected),
             dimmed: month.year() != shown.year(),
+            focus: cells.focus && same_month(cells.selected),
         };
         let label = MONTHS[month.month0() as usize];
+        let name = month.format("%B %Y").to_string();
         let id = Id::new("calendar-month").with(i);
-        if calendar_cell(p, ui, id, grid_cell(body, i as usize), label, state) {
+        let cell = grid_cell(body, i as usize);
+        if calendar_cell(p, ui, id, cell, label, &name, state) {
             action = Some(CalendarAction::Show(CalendarView::Month, month));
         }
     }
@@ -807,8 +881,7 @@ fn decade_view(
     ui: &Ui,
     body: Rect,
     shown: NaiveDate,
-    today: NaiveDate,
-    selected: NaiveDate,
+    cells: Cells,
 ) -> Option<CalendarAction> {
     let start = decade_start(shown);
     let mut action = None;
@@ -818,13 +891,15 @@ fn decade_view(
             continue;
         }
         let state = CellState {
-            today: today.year() == year,
-            selected: selected.year() == year,
+            today: cells.today.year() == year,
+            selected: cells.selected.year() == year,
             dimmed: year > start + 9,
+            focus: cells.focus && cells.selected.year() == year,
         };
         let id = Id::new("calendar-year").with(i);
         let cell = grid_cell(body, i as usize);
-        if calendar_cell(p, ui, id, cell, &year.to_string(), state) {
+        let label = year.to_string();
+        if calendar_cell(p, ui, id, cell, &label, &label, state) {
             let january = NaiveDate::from_ymd_opt(year, 1, 1)?;
             action = Some(CalendarAction::Show(CalendarView::Year, january));
         }
@@ -847,15 +922,30 @@ struct CellState {
     today: bool,
     selected: bool,
     dimmed: bool,
+    /// Take the keyboard focus.
+    focus: bool,
 }
 
-/// A round calendar cell: today is filled with the accent color, the
-/// selected date gets an accent ring. Returns `true` when clicked.
-fn calendar_cell(p: &Palette, ui: &Ui, id: Id, cell: Rect, label: &str, state: CellState) -> bool {
-    let response = ui.interact(cell, id, Sense::CLICK);
+/// A round calendar cell: today is filled with the accent color, the selected date
+/// gets an accent ring. `name` is what a screen reader says. Returns `true` when clicked.
+fn calendar_cell(
+    p: &Palette,
+    ui: &Ui,
+    id: Id,
+    cell: Rect,
+    label: &str,
+    name: &str,
+    state: CellState,
+) -> bool {
+    let radius = (cell.width().min(cell.height()) / 2.0 - 1.0).min(28.0);
+    let circle = Rect::from_center_size(cell.center(), vec2(2.0 * radius, 2.0 * radius));
+    let info = access::item(WidgetType::Button, name, state.selected);
+    let response = access::control(ui, p, circle, id, true, radius, info);
+    if state.focus {
+        response.request_focus();
+    }
     let pressed = response.is_pointer_button_down_on();
     let hovered = response.hovered();
-    let radius = (cell.width().min(cell.height()) / 2.0 - 1.0).min(28.0);
     let (fill, text) = if state.today {
         let fill = if pressed {
             p.accent_pressed
@@ -918,8 +1008,9 @@ fn paragraph(
     bottom
 }
 
-/// An item of a drop-down list: highlighted when hovered or selected, with
-/// the accent pill on the selected one. Returns `true` when clicked.
+/// An item of a drop-down list: highlighted when hovered or selected, with the accent
+/// pill on the selected one. `focus` gives it the keyboard focus (the selected item of
+/// a list opened with the keyboard). Returns `true` when clicked.
 pub(super) fn list_item(
     p: &Palette,
     ui: &Ui,
@@ -927,8 +1018,13 @@ pub(super) fn list_item(
     rect: Rect,
     label: &str,
     selected: bool,
+    focus: bool,
 ) -> bool {
-    let response = ui.interact(rect, id, Sense::CLICK);
+    let info = access::item(WidgetType::SelectableLabel, label, selected);
+    let response = access::control(ui, p, rect, id, true, RADIUS, info);
+    if focus {
+        response.request_focus();
+    }
     let fill = if response.is_pointer_button_down_on() {
         p.popup_item_pressed
     } else if response.hovered() || selected {
@@ -954,13 +1050,10 @@ pub(super) fn list_item(
 }
 
 /// A transparent button that only shows a background on hover.
-fn flat_button(p: &Palette, ui: &Ui, id: Id, rect: Rect, enabled: bool) -> bool {
-    let sense = if enabled {
-        Sense::CLICK
-    } else {
-        Sense::hover()
-    };
-    let response = ui.interact(rect, id, sense);
+/// `name` is what a screen reader says.
+fn flat_button(p: &Palette, ui: &Ui, id: Id, rect: Rect, enabled: bool, name: &str) -> bool {
+    let info = access::button(enabled, name);
+    let response = access::control(ui, p, rect, id, enabled, RADIUS, info);
     if enabled {
         let fill = if response.is_pointer_button_down_on() {
             p.calendar_pressed

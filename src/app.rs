@@ -1,5 +1,6 @@
 //! User interface styled after the Windows 11 calculator, in a dark or light theme.
 
+mod access;
 mod converter_view;
 mod date_view;
 mod palette;
@@ -11,14 +12,14 @@ use std::time::Duration;
 use eframe::egui::{
     self, Align, Align2, Color32, Context, CornerRadius, CursorIcon, Event, FontFamily, FontId,
     Galley, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextFormat,
-    TextureHandle, TextureOptions, Ui, UiBuilder, ViewportCommand, WindowLevel, pos2,
-    text::LayoutJob, vec2,
+    TextureHandle, TextureOptions, Ui, UiBuilder, ViewportCommand, WidgetInfo, WidgetType,
+    WindowLevel, pos2, text::LayoutJob, vec2,
 };
 
 use crate::converter::Category;
 use crate::engine::{Calculator, Command, Func, Op, format_number};
 use palette::Palette;
-use strings::tr;
+use strings::{tr, tr_format};
 
 // Glyphs from the Segoe Fluent Icons / Segoe MDL2 Assets fonts.
 const ICON_MENU: char = '\u{E700}';
@@ -96,6 +97,10 @@ const DOCK_MAX_WIDTH: f32 = 320.0;
 const MEMORY_BUTTON_MAX_WIDTH: f32 = 80.0;
 /// How long (in seconds) a button looks pressed after its keyboard key is pressed.
 const KEY_FLASH: f64 = 0.1;
+/// The menu button's names. Windows uses WinUI's own `NavigationView` strings, which
+/// aren't in the Calculator's resources, so these stay English.
+const NAVIGATION_OPEN: &str = "Open Navigation";
+const NAVIGATION_CLOSE: &str = "Close Navigation";
 
 const REPOSITORY_URL: &str = "https://github.com/gavrilov/calccraft";
 const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
@@ -240,6 +245,15 @@ pub struct CalculatorApp {
     theme_expanded: bool,
     /// The window icon, shown in the About card.
     app_icon: TextureHandle,
+    /// The control a popup or flyout was opened from with the keyboard. It gets the
+    /// focus back when the popup closes, as in WinUI.
+    focus_return: Option<Id>,
+    /// A popup opened with the keyboard: its selected item takes the focus when drawn.
+    focus_popup: bool,
+    /// The control that had the keyboard focus last frame (egui drops it on `Esc`).
+    last_focus: Option<Id>,
+    /// The navigation menu has just opened.
+    nav_opened: bool,
 }
 
 impl CalculatorApp {
@@ -287,7 +301,39 @@ impl CalculatorApp {
             title_bar: TitleBar::new(cc),
             theme_expanded: false,
             app_icon,
+            focus_return: None,
+            focus_popup: false,
+            last_focus: None,
+            nav_opened: false,
         }
+    }
+
+    /// Whether a popup covers the page: the navigation menu, a context menu, or a
+    /// drop-down or calendar. The controls under it leave the `Tab` order.
+    fn popup_covers(&self) -> bool {
+        self.flyout == Flyout::Navigation
+            || self.context_menu.is_some()
+            || self.date.popup_open()
+            || self.converter.popup_open()
+    }
+
+    /// Notes that a popup or flyout opened from the control `id`. If the keyboard
+    /// opened it (the control has the focus), the popup's selected item takes the
+    /// focus, and the control gets it back when the popup closes.
+    fn opened_from(&mut self, ctx: &Context, id: Id) {
+        if access::focused(ctx) == Some(id) {
+            self.focus_return = Some(id);
+            self.focus_popup = true;
+        }
+    }
+
+    /// Takes the request to focus a popup's selected item, for the item that is drawn.
+    fn take_popup_focus(&mut self, selected: bool) -> bool {
+        let focus = selected && self.focus_popup;
+        if focus {
+            self.focus_popup = false;
+        }
+        focus
     }
 
     fn set_theme(&mut self, ctx: &Context, theme: Theme) {
@@ -332,11 +378,14 @@ impl CalculatorApp {
             }
             return;
         }
+        // With the menu or a context menu open, Windows ignores the calculator's keys
+        // (`HonorShortcuts(false)`); Esc closes them.
+        let covered = self.flyout == Flyout::Navigation || self.context_menu.is_some();
         let events = ctx.input(|i| i.events.clone());
         let now = ctx.input(|i| i.time);
         for event in events {
             match event {
-                Event::Text(text) => {
+                Event::Text(text) if !covered => {
                     for command in text.chars().filter_map(char_command) {
                         self.press(command, now);
                     }
@@ -346,15 +395,15 @@ impl CalculatorApp {
                     pressed: true,
                     modifiers,
                     ..
-                } => {
+                } if !covered || key == Key::Escape => {
                     self.handle_key(ctx, key, modifiers, now);
                 }
-                Event::Copy => {
+                Event::Copy if !covered => {
                     if let Some(text) = self.calc.copy_text() {
                         ctx.copy_text(text);
                     }
                 }
-                Event::Paste(text) => {
+                Event::Paste(text) if !covered => {
                     self.calc.paste(&text);
                 }
                 _ => {}
@@ -382,10 +431,24 @@ impl CalculatorApp {
             }
         } else {
             match key {
-                Key::Enter => Command::Equals,
+                // Enter presses a focused button that isn't one of the calculator's keys.
+                Key::Enter if access::focused(ctx).is_some_and(|id| !is_calculator_key(id)) => {
+                    return;
+                }
+                Key::Enter => {
+                    // Otherwise it's `=`, and the focused key isn't pressed too.
+                    ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                    Command::Equals
+                }
                 Key::Escape if self.context_menu.is_some() => return self.context_menu = None,
                 Key::Escape if self.flyout != Flyout::None => return self.flyout = Flyout::None,
-                Key::Escape => Command::Clear,
+                Key::Escape => {
+                    // egui drops the focus on Esc; in Windows it's only `C`.
+                    if let Some(id) = self.last_focus {
+                        ctx.memory_mut(|memory| memory.request_focus(id));
+                    }
+                    Command::Clear
+                }
                 Key::Delete => Command::ClearEntry,
                 Key::Backspace => Command::Backspace,
                 Key::F9 => Command::Function(Func::Negate),
@@ -415,7 +478,8 @@ impl CalculatorApp {
         match self.flyout {
             Flyout::History => self.dock_tab = Panel::History,
             Flyout::Memory => self.dock_tab = Panel::Memory,
-            Flyout::None | Flyout::Navigation => {}
+            Flyout::Navigation => self.nav_opened = true,
+            Flyout::None => {}
         }
     }
 
@@ -436,7 +500,9 @@ impl CalculatorApp {
 
     // --------------------------------------------------------------- buttons
 
-    /// Draws a button and returns `true` if it was clicked.
+    /// Draws a button and returns `true` if it was clicked. `name` is what a screen
+    /// reader says.
+    #[allow(clippy::too_many_arguments)]
     fn button(
         &self,
         ui: &Ui,
@@ -445,8 +511,9 @@ impl CalculatorApp {
         kind: Kind,
         enabled: bool,
         label: LayoutJob,
+        name: &str,
     ) -> bool {
-        self.button_flash(ui, rect, id, kind, enabled, label, false)
+        self.button_flash(ui, rect, id, kind, enabled, label, name, false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -458,15 +525,19 @@ impl CalculatorApp {
         kind: Kind,
         enabled: bool,
         label: LayoutJob,
+        name: &str,
         flash: bool,
     ) -> bool {
         let p = self.palette;
-        let sense = if enabled {
-            Sense::CLICK
-        } else {
-            Sense::hover()
-        };
-        let response = ui.interact(rect, id, sense);
+        let response = access::control(
+            ui,
+            p,
+            rect,
+            id,
+            enabled,
+            RADIUS,
+            access::button(enabled, name),
+        );
         let pressed = enabled && (response.is_pointer_button_down_on() || flash);
         let hovered = enabled && response.hovered();
 
@@ -534,6 +605,7 @@ impl CalculatorApp {
                 Kind::Subtle,
                 true,
                 label,
+                tr("ExitAlwaysOnTopButton.AutomationName"),
             ) {
                 self.set_compact(&ctx, false);
             }
@@ -548,8 +620,10 @@ impl CalculatorApp {
             Kind::Subtle,
             true,
             label,
+            NAVIGATION_OPEN,
         ) {
             self.toggle_flyout(Flyout::Navigation);
+            self.opened_from(&ctx, Id::new("menu"));
         }
 
         let title = ui.painter().text(
@@ -574,6 +648,7 @@ impl CalculatorApp {
             Kind::Subtle,
             true,
             label,
+            tr("EnterAlwaysOnTopButton.AutomationName"),
         ) {
             self.set_compact(&ctx, true);
         }
@@ -582,6 +657,11 @@ impl CalculatorApp {
         }
 
         let label = self.icon(ICON_HISTORY, "↺", 16.0);
+        let name = if self.flyout == Flyout::History {
+            tr("HistoryButton_Close")
+        } else {
+            tr("HistoryButton_Open")
+        };
         if self.button(
             ui,
             icon_button(rect.right() - 24.0),
@@ -589,8 +669,10 @@ impl CalculatorApp {
             Kind::Subtle,
             true,
             label,
+            name,
         ) {
             self.toggle_flyout(Flyout::History);
+            self.opened_from(&ctx, Id::new("history"));
         }
     }
 
@@ -614,15 +696,23 @@ impl CalculatorApp {
         if !expression.is_empty() {
             let galley =
                 layout_elided_left(painter, &expression, FontId::proportional(14.0), max_width);
-            painter.galley(
-                pos2(right - galley.size().x, rect.top() + 6.0),
-                galley,
-                p.text_secondary,
-            );
+            let pos = pos2(right - galley.size().x, rect.top() + 6.0);
+            let name = tr_format("Format_CalculatorExpression", &[&expression]);
+            let line = Rect::from_min_size(pos, galley.size());
+            access::text(ui, line, Id::new("expression"), &name, false);
+            painter.galley(pos, galley, p.text_secondary);
         }
 
-        // Long numbers shrink to fit the width.
+        // Screen readers read the display out whenever it changes ("Display is 7"),
+        // and say "point" for a decimal point that has no digits after it yet.
         let display = self.display_text();
+        let name = match display.strip_suffix('.') {
+            Some(number) => tr_format("Format_CalculatorResults_Decimal", &[number]),
+            None => tr_format("Format_CalculatorResults", &[&display]),
+        };
+        access::text(ui, rect, Id::new("display-value"), &name, true);
+
+        // Long numbers shrink to fit the width.
         let base_size = (rect.height() * 0.46).clamp(28.0, 72.0);
         let mut galley =
             painter.layout_no_wrap(display.clone(), FontId::new(base_size, semibold()), p.text);
@@ -669,6 +759,7 @@ impl CalculatorApp {
                 Kind::Subtle,
                 enabled,
                 label,
+                command_name(command),
                 flash,
             ) {
                 self.calc.execute(command);
@@ -686,15 +777,15 @@ impl CalculatorApp {
         } else {
             label.append("˅", 0.0, format(12.0, FontFamily::Proportional));
         }
-        if self.button(
-            ui,
-            cell(5),
-            Id::new("memory-list"),
-            Kind::Subtle,
-            enabled,
-            label,
-        ) {
+        let name = if self.flyout == Flyout::Memory {
+            tr("MemoryButton_Close")
+        } else {
+            tr("MemoryButton_Open")
+        };
+        let id = Id::new("memory-list");
+        if self.button(ui, cell(5), id, Kind::Subtle, enabled, label, name) {
             self.toggle_flyout(Flyout::Memory);
+            self.opened_from(ui.ctx(), id);
         }
     }
 
@@ -775,6 +866,7 @@ impl CalculatorApp {
                 kind,
                 enabled,
                 label,
+                command_name(command),
                 flash,
             ) {
                 self.calc.execute(command);
@@ -817,10 +909,13 @@ impl CalculatorApp {
         let painter = ui.painter().clone();
         let top = rect.top() - 3.0;
         let mut left = rect.left();
-        for (panel, label) in [
+        for (i, (panel, label)) in [
             (Panel::History, tr("HistoryLabel.Text")),
             (Panel::Memory, tr("MemoryLabel.Text")),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let galley = painter.layout_no_wrap(
                 label.to_string(),
                 FontId::proportional(14.0),
@@ -831,7 +926,10 @@ impl CalculatorApp {
                 vec2(galley.size().x + 2.0 * HEADER_PADDING, HEADER_HEIGHT),
             );
             left = header.right();
-            let response = ui.interact(header, Id::new("dock-tab").with(label), Sense::CLICK);
+            let selected = self.dock_tab == panel;
+            let info = access::item(WidgetType::SelectableLabel, label, selected);
+            let id = Id::new("dock-tab").with(i);
+            let response = access::control(ui, p, header, id, true, RADIUS, info);
             let pressed = response.is_pointer_button_down_on();
             let hovered = response.hovered();
             let (color, pipe) = if pressed {
@@ -846,7 +944,7 @@ impl CalculatorApp {
                 header.center().y - galley.size().y / 2.0,
             );
             painter.galley(text_pos, galley, color);
-            if self.dock_tab == panel {
+            if selected {
                 let pipe_rect = Rect::from_center_size(
                     pos2(header.center().x, header.bottom() - 2.0 - 1.5),
                     vec2(16.0, 3.0),
@@ -906,15 +1004,18 @@ impl CalculatorApp {
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
+                    // A flyout opened with the keyboard focuses its first item.
                     if history {
                         for i in 0..self.calc.history().len() {
-                            if let Some(a) = self.history_item(ui, i) {
+                            let focus = self.take_popup_focus(i == 0);
+                            if let Some(a) = self.history_item(ui, i, focus) {
                                 action = Some(a);
                             }
                         }
                     } else {
                         for i in 0..self.calc.memory().len() {
-                            if let Some(a) = self.memory_item(ui, i) {
+                            let focus = self.take_popup_focus(i == 0);
+                            if let Some(a) = self.memory_item(ui, i, focus) {
                                 action = Some(a);
                             }
                         }
@@ -927,7 +1028,12 @@ impl CalculatorApp {
             vec2(40.0, 36.0),
         );
         let label = self.icon(ICON_DELETE, "🗑", 15.0);
-        if self.button(ui, trash, Id::new("trash"), Kind::Subtle, true, label) {
+        let name = if history {
+            tr("ClearHistory.AutomationName")
+        } else {
+            tr("ClearMemory.AutomationName")
+        };
+        if self.button(ui, trash, Id::new("trash"), Kind::Subtle, true, label, name) {
             action = Some(FlyoutAction::ClearAll);
         }
         // Drawn last, so it covers the panel and catches the clicks outside it.
@@ -965,8 +1071,8 @@ impl CalculatorApp {
     }
 
     /// History entry: small expression, large result. A click recalls it and a
-    /// right click opens its menu.
-    fn history_item(&self, ui: &mut Ui, index: usize) -> Option<FlyoutAction> {
+    /// right click opens its menu. `focus` gives it the keyboard focus.
+    fn history_item(&self, ui: &mut Ui, index: usize, focus: bool) -> Option<FlyoutAction> {
         let p = self.palette;
         let entry = &self.calc.history()[index];
         let width = ui.available_width();
@@ -985,7 +1091,15 @@ impl CalculatorApp {
         );
         let height = 10.0 + expression.size().y + result.size().y + 10.0;
 
-        let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::CLICK);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        // Windows names the entry by its expression and result.
+        let name = format!("{} {}", entry.expression, format_number(&entry.result));
+        let id = Id::new("history-item").with(index);
+        let info = access::item(WidgetType::SelectableLabel, &name, false);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
+        if focus {
+            response.request_focus();
+        }
         if response.hovered() {
             painter.rect_filled(rect, RADIUS, p.subtle_hover);
         }
@@ -1011,21 +1125,32 @@ impl CalculatorApp {
             .then_some(FlyoutAction::RecallHistory(index))
     }
 
-    /// Memory slot; on hover it shows MC, M+ and M− buttons.
-    fn memory_item(&self, ui: &mut Ui, index: usize) -> Option<FlyoutAction> {
+    /// Memory slot; on hover it shows MC, M+ and M− buttons, and so it does while it or
+    /// one of them has the keyboard focus. `focus` gives it the focus.
+    fn memory_item(&self, ui: &mut Ui, index: usize, focus: bool) -> Option<FlyoutAction> {
         let p = self.palette;
         let value = &self.calc.memory()[index];
         let width = ui.available_width();
+        let shown = format_number(value);
         let result = layout_elided_left(
             ui.painter(),
-            &format_number(value),
+            &shown,
             FontId::new(20.0, semibold()),
             width - 24.0,
         );
         let height = 10.0 + result.size().y + 6.0 + 26.0 + 10.0;
 
-        let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::CLICK);
-        let hovered = ui.rect_contains_pointer(rect);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let id = Id::new("memory-slot").with(index);
+        let info = access::item(WidgetType::SelectableLabel, &shown, false);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
+        if focus {
+            response.request_focus();
+        }
+        let buttons_focused = access::focused(ui.ctx()).is_some_and(|focused| {
+            (0..3).any(|i| focused == Id::new("memory-item").with(index).with(i))
+        });
+        let hovered = ui.rect_contains_pointer(rect) || response.has_focus() || buttons_focused;
         let painter = ui.painter();
         if hovered {
             painter.rect_filled(rect, RADIUS, p.subtle_hover);
@@ -1047,12 +1172,24 @@ impl CalculatorApp {
         }
         if hovered {
             let buttons = [
-                ("MC", FlyoutAction::MemoryClear(index)),
-                ("M+", FlyoutAction::MemoryAdd(index, false)),
-                ("M−", FlyoutAction::MemoryAdd(index, true)),
+                (
+                    "MC",
+                    "ClearMemoryItemButton.AutomationName",
+                    FlyoutAction::MemoryClear(index),
+                ),
+                (
+                    "M+",
+                    "MemPlusItem.AutomationName",
+                    FlyoutAction::MemoryAdd(index, false),
+                ),
+                (
+                    "M−",
+                    "MemMinusItem.AutomationName",
+                    FlyoutAction::MemoryAdd(index, true),
+                ),
             ];
             let top = rect.top() + 10.0 + result_height + 6.0;
-            for (i, (label, button_action)) in buttons.into_iter().enumerate() {
+            for (i, (label, name, button_action)) in buttons.into_iter().enumerate() {
                 let x = right - (3 - i) as f32 * 42.0 + 2.0;
                 let cell = Rect::from_min_size(pos2(x, top), vec2(40.0, 26.0));
                 let id = Id::new("memory-item").with(index).with(i);
@@ -1063,6 +1200,7 @@ impl CalculatorApp {
                     Kind::Digit,
                     true,
                     text(label, 12.0, semibold()),
+                    tr(name),
                 ) {
                     action = Some(button_action);
                 }
@@ -1081,6 +1219,7 @@ impl CalculatorApp {
         let p = self.palette;
         let full = ui.max_rect();
         let backdrop = ui.interact(full, Id::new("context-menu-backdrop"), Sense::CLICK);
+        access::set_covered(ui.ctx(), false);
 
         // The memory items show the Calculator font's MC, M+ and M− glyphs as text.
         let items = match menu.target {
@@ -1148,7 +1287,14 @@ impl CalculatorApp {
                 rect.min + vec2(4.0, 4.0 + n as f32 * STRIDE),
                 vec2(rect.width() - 8.0, ITEM_HEIGHT),
             );
-            let response = ui.interact(item, Id::new("context-menu-item").with(n), Sense::CLICK);
+            // "Delete" is "Delete history item" to screen readers.
+            let name = match action {
+                FlyoutAction::DeleteHistory(_) => tr("DeleteHistoryMenuItem.AutomationName"),
+                _ => label,
+            };
+            let id = Id::new("context-menu-item").with(n);
+            let response =
+                access::control(ui, p, item, id, true, RADIUS, access::button(true, name));
             let fill = if response.is_pointer_button_down_on() {
                 p.popup_item_pressed
             } else if response.hovered() {
@@ -1184,6 +1330,7 @@ impl CalculatorApp {
         let painter = ui.painter().clone();
         painter.rect_filled(rect, 0.0, p.backdrop);
         let backdrop = ui.interact(rect, Id::new("nav-backdrop"), Sense::CLICK);
+        access::set_covered(ui.ctx(), false);
 
         let panel = Rect::from_min_size(
             rect.min,
@@ -1202,7 +1349,8 @@ impl CalculatorApp {
             vec2(40.0, 36.0),
         );
         let label = self.icon(ICON_MENU, "≡", 16.0);
-        let mut close = self.button(ui, menu, Id::new("nav-menu"), Kind::Subtle, true, label);
+        let id = Id::new("nav-menu");
+        let mut close = self.button(ui, menu, id, Kind::Subtle, true, label, NAVIGATION_CLOSE);
 
         // The modes in two groups. They scroll between the header and Settings
         // when the window is too short for all of them.
@@ -1210,48 +1358,68 @@ impl CalculatorApp {
             pos2(panel.left(), panel.top() + HEADER_HEIGHT),
             pos2(panel.right(), panel.bottom() - 58.0),
         );
+        // Each group's heading and the name screen readers give it.
         let groups = [
-            (tr("CalculatorModeTextCaps"), Mode::CALCULATORS.to_vec()),
+            (
+                tr("CalculatorModeTextCaps"),
+                tr("CalculatorModePluralText"),
+                Mode::CALCULATORS.to_vec(),
+            ),
             (
                 tr("ConverterModeTextCaps"),
+                tr("ConverterModePluralText"),
                 Category::ALL.map(Mode::Converter).to_vec(),
             ),
         ];
+        // Like Windows, the menu opens scrolled to the top (egui would keep, and even save,
+        // the last position).
+        let mut area = egui::ScrollArea::vertical()
+            .id_salt("nav-modes")
+            .auto_shrink(false);
+        if std::mem::take(&mut self.nav_opened) {
+            area = area.vertical_scroll_offset(0.0);
+        }
         let mut chosen = None;
         ui.scope_builder(UiBuilder::new().max_rect(list), |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("nav-modes")
-                .auto_shrink(false)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    for (title, modes) in groups {
-                        let size = vec2(ui.available_width(), 34.0);
-                        let (header, _) = ui.allocate_exact_size(size, Sense::hover());
-                        ui.painter().text(
-                            pos2(header.left() + 16.0, header.top() + 8.0),
-                            Align2::LEFT_TOP,
-                            title,
-                            FontId::new(14.0, semibold()),
-                            p.text,
-                        );
-                        for mode in modes {
-                            let size = vec2(ui.available_width(), 40.0);
-                            let (row, _) = ui.allocate_exact_size(size, Sense::hover());
-                            let item = row.shrink2(vec2(4.0, 0.0));
-                            let icon = match mode {
-                                Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
-                                Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
-                                Mode::Converter(category) => {
-                                    self.icon(category_icon(category), "▫", 16.0)
-                                }
-                            };
-                            let id = Id::new("nav-mode").with(mode.title());
-                            if self.nav_item(ui, item, id, icon, mode.title(), self.mode == mode) {
-                                chosen = Some(mode);
+            area.show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (title, plural, modes) in groups {
+                    let size = vec2(ui.available_width(), 34.0);
+                    let (header, _) = ui.allocate_exact_size(size, Sense::hover());
+                    let name = tr_format("NavCategoryHeader_AutomationNameFormat", &[plural]);
+                    access::text(ui, header, Id::new("nav-group").with(title), &name, false);
+                    ui.painter().text(
+                        pos2(header.left() + 16.0, header.top() + 8.0),
+                        Align2::LEFT_TOP,
+                        title,
+                        FontId::new(14.0, semibold()),
+                        p.text,
+                    );
+                    for mode in modes {
+                        let size = vec2(ui.available_width(), 40.0);
+                        let (row, _) = ui.allocate_exact_size(size, Sense::hover());
+                        let item = row.shrink2(vec2(4.0, 0.0));
+                        let icon = match mode {
+                            Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
+                            Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
+                            Mode::Converter(category) => {
+                                self.icon(category_icon(category), "▫", 16.0)
                             }
+                        };
+                        let id = Id::new("nav-mode").with(mode.title());
+                        let selected = self.mode == mode;
+                        // "Standard Calculator", "Length Converter".
+                        let name = tr_format(
+                            "NavCategoryItem_AutomationNameFormat",
+                            &[mode.title(), title],
+                        );
+                        let focus = self.take_popup_focus(selected);
+                        if self.nav_item(ui, item, id, icon, mode.title(), &name, selected, focus) {
+                            chosen = Some(mode);
                         }
                     }
-                });
+                }
+            });
         });
         if let Some(mode) = chosen {
             self.set_mode(mode);
@@ -1269,14 +1437,9 @@ impl CalculatorApp {
             Stroke::new(1.0, p.flyout_border),
         );
         let icon = self.icon(ICON_SETTINGS, "⚙", 16.0);
-        let settings = self.nav_item(
-            ui,
-            item,
-            Id::new("nav-settings"),
-            icon,
-            tr("SettingsHeader.Text"),
-            false,
-        );
+        let label = tr("SettingsHeader.Text");
+        let id = Id::new("nav-settings");
+        let settings = self.nav_item(ui, item, id, icon, label, label, false, false);
 
         if settings {
             self.page = Page::Settings;
@@ -1286,8 +1449,10 @@ impl CalculatorApp {
         }
     }
 
-    /// Navigation pane entry. The selected one has a fill and the accent pill.
+    /// Navigation pane entry. The selected one has a fill and the accent pill. `name` is
+    /// what a screen reader says, and `focus` gives the entry the keyboard focus.
     /// Returns `true` if it was clicked.
+    #[allow(clippy::too_many_arguments)]
     fn nav_item(
         &self,
         ui: &Ui,
@@ -1295,11 +1460,17 @@ impl CalculatorApp {
         id: Id,
         icon: LayoutJob,
         label: &str,
+        name: &str,
         selected: bool,
+        focus: bool,
     ) -> bool {
         let p = self.palette;
         let painter = ui.painter();
-        let response = ui.interact(rect, id, Sense::CLICK);
+        let info = access::item(WidgetType::SelectableLabel, name, selected);
+        let response = access::control(ui, p, rect, id, true, RADIUS, info);
+        if focus {
+            response.request_focus();
+        }
         let fill = if response.is_pointer_button_down_on() || (selected && !response.hovered()) {
             p.subtle_hover
         } else if response.hovered() {
@@ -1348,6 +1519,7 @@ impl CalculatorApp {
             Kind::Subtle,
             true,
             label,
+            tr("TitleBarBackButton.AutomationName"),
         ) {
             self.page = Page::Calculator;
         }
@@ -1454,7 +1626,17 @@ impl CalculatorApp {
         );
         let card = Rect::from_x_y_ranges(left..=right, top + theme_top..=top + theme_bottom);
         let header = card.with_max_y(card.top() + header_height);
-        let response = ui.interact(header, Id::new("theme-card"), Sense::CLICK);
+        // WinUI's expander says whether it is expanded.
+        let info = || {
+            let mut info = WidgetInfo::labeled(
+                WidgetType::CollapsingHeader,
+                true,
+                tr("AppThemeExpander.Header"),
+            );
+            info.selected = Some(self.theme_expanded);
+            info
+        };
+        let response = access::control(ui, p, header, Id::new("theme-card"), true, RADIUS, info);
         let fill = if response.is_pointer_button_down_on() {
             p.card_pressed
         } else if response.hovered() {
@@ -1584,12 +1766,9 @@ impl CalculatorApp {
         let start = prefix.chars().count();
         let link = char_range_rect(&contribute, start..start + link_text.chars().count());
         let origin = pos2(left, top + contribute_top);
-        let response = ui
-            .interact(
-                link.translate(origin.to_vec2()),
-                Id::new("github"),
-                Sense::CLICK,
-            )
+        let info = || WidgetInfo::labeled(WidgetType::Link, true, link_text);
+        let link = link.translate(origin.to_vec2());
+        let response = access::control(ui, p, link, Id::new("github"), true, RADIUS, info)
             .on_hover_cursor(CursorIcon::PointingHand);
         if response.is_pointer_button_down_on() {
             contribute = paragraph(p.link_pressed);
@@ -1655,6 +1834,27 @@ impl eframe::App for CalculatorApp {
         }
         self.docked =
             self.mode == Mode::Standard && !self.compact && ui.max_rect().width() >= DOCK_WIDTH;
+
+        // The controls under an open popup leave the Tab order, and the control a popup
+        // was opened from with the keyboard gets the focus back when it closes.
+        let popup_covers = self.popup_covers();
+        access::set_covered(&ctx, popup_covers);
+        if !popup_covers && !matches!(self.flyout, Flyout::History | Flyout::Memory) {
+            if let Some(id) = self.focus_return.take() {
+                ctx.memory_mut(|memory| memory.request_focus(id));
+            }
+            self.focus_popup = false;
+        }
+
+        self.draw_frame(ui, &ctx);
+        self.last_focus = access::focused(&ctx);
+    }
+}
+
+impl CalculatorApp {
+    /// Handles the keyboard and draws the page.
+    fn draw_frame(&mut self, ui: &mut Ui, ctx: &Context) {
+        let ctx = ctx.clone();
         self.handle_mode_keys(&ctx);
         match self.mode {
             _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
@@ -1877,7 +2077,8 @@ fn radio_button(
         pos2(left_center.x, left_center.y - 16.0),
         pos2(text_pos.x + galley.size().x, left_center.y + 16.0),
     );
-    let response = ui.interact(rect, id, Sense::CLICK);
+    let info = access::item(WidgetType::RadioButton, label, checked);
+    let response = access::control(ui, p, rect, id, true, RADIUS, info);
     let pressed = response.is_pointer_button_down_on();
     let hovered = response.hovered();
 
@@ -1923,8 +2124,8 @@ fn link_button(p: &Palette, ui: &Ui, left_center: Pos2, label: &str, id: Id) -> 
     );
     let text_pos = pos2(left_center.x, left_center.y - galley.size().y / 2.0);
     let rect = Rect::from_min_size(text_pos, galley.size()).expand2(vec2(4.0, 2.0));
-    let response = ui
-        .interact(rect, id, Sense::CLICK)
+    let info = || WidgetInfo::labeled(WidgetType::Link, true, label);
+    let response = access::control(ui, p, rect, id, true, RADIUS, info)
         .on_hover_cursor(CursorIcon::PointingHand);
     let (fill, color) = if response.is_pointer_button_down_on() {
         (p.subtle_pressed, p.link_pressed)
@@ -1971,6 +2172,49 @@ fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
         _ => true,
     });
     chosen
+}
+
+/// The keypad's keys and the memory row are Windows' `CalculatorButton`s, which ignore
+/// `Enter` so that it always means `=`.
+fn is_calculator_key(id: Id) -> bool {
+    (0..24).any(|i| id == Id::new("key").with(i)) || (0..5).any(|i| id == Id::new("memory").with(i))
+}
+
+/// The name a screen reader gives a key (Windows' `AutomationProperties.Name`).
+fn command_name(command: Command) -> &'static str {
+    tr(match command {
+        Command::Digit(0) => "num0Button.AutomationName",
+        Command::Digit(1) => "num1Button.AutomationName",
+        Command::Digit(2) => "num2Button.AutomationName",
+        Command::Digit(3) => "num3Button.AutomationName",
+        Command::Digit(4) => "num4Button.AutomationName",
+        Command::Digit(5) => "num5Button.AutomationName",
+        Command::Digit(6) => "num6Button.AutomationName",
+        Command::Digit(7) => "num7Button.AutomationName",
+        Command::Digit(8) => "num8Button.AutomationName",
+        Command::Digit(_) => "num9Button.AutomationName",
+        Command::Decimal => "decimalSeparatorButton.AutomationName",
+        Command::Operator(Op::Add) => "plusButton.AutomationName",
+        Command::Operator(Op::Subtract) => "minusButton.AutomationName",
+        Command::Operator(Op::Multiply) => "multiplyButton.AutomationName",
+        Command::Operator(Op::Divide) => "divideButton.AutomationName",
+        Command::Equals => "equalButton.AutomationName",
+        Command::Percent => "percentButton.AutomationName",
+        Command::ClearEntry => "clearEntryButton.AutomationName",
+        Command::Clear => "clearButton.AutomationName",
+        Command::Backspace => "backSpaceButton.AutomationName",
+        Command::Function(Func::Reciprocal) => "invertButton.AutomationName",
+        Command::Function(Func::Square) => "xpower2Button.AutomationName",
+        Command::Function(Func::SquareRoot) => "squareRootButton.AutomationName",
+        Command::Function(Func::Negate) => "negateButton.AutomationName",
+        Command::MemoryClear => "ClearMemoryButton.AutomationName",
+        Command::MemoryRecall => "MemRecall.AutomationName",
+        Command::MemoryAdd => "MemPlus.AutomationName",
+        Command::MemorySubtract => "MemMinus.AutomationName",
+        Command::MemoryStore => "memButton.AutomationName",
+        // Parentheses belong to the Scientific mode, which has no keypad yet.
+        Command::OpenParen | Command::CloseParen => return "",
+    })
 }
 
 /// Keys that arrive as text: digits and operators, as in Windows.

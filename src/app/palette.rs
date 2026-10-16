@@ -73,6 +73,10 @@ pub(super) struct Palette {
     /// (WinUI's BaseMediumHigh and BaseMedium: text at 80 % and 60 %).
     pub unit_hover: Color32,
     pub unit_pressed: Color32,
+    /// The focus visual's outer and inner rings (WinUI's `FocusStrokeColorOuter` and
+    /// `FocusStrokeColorInner`), drawn over the page.
+    pub focus_outer: Color32,
+    pub focus_inner: Color32,
 }
 
 /// `color` at `opacity` over `base`, as an opaque color.
@@ -161,6 +165,8 @@ pub(super) const DARK: Palette = Palette {
     control_border: Color32::from_rgb(0x44, 0x36, 0x44),
     unit_hover: white(DARK_BACKGROUND, 0.8),
     unit_pressed: white(DARK_BACKGROUND, 0.6),
+    focus_outer: Color32::WHITE,
+    focus_inner: Color32::from_black_alpha(0xB3),
 };
 
 pub(super) const LIGHT: Palette = Palette {
@@ -219,6 +225,9 @@ pub(super) const LIGHT: Palette = Palette {
     control_border: black(LIGHT_BACKGROUND, 0.0578),
     unit_hover: black(LIGHT_BACKGROUND, 0.8),
     unit_pressed: black(LIGHT_BACKGROUND, 0.6),
+    focus_outer: Color32::from_black_alpha(0xE4),
+    // White at 70 %, premultiplied.
+    focus_inner: Color32::from_rgba_premultiplied(0xB3, 0xB3, 0xB3, 0xB3),
 };
 
 #[cfg(test)]
