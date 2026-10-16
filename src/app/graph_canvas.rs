@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 
 use super::graphing_view::{Capture, Popup, Purpose, edit_id, paint_graph_icon};
+use super::icons::{ICON_MINUS, ICON_PLUS, ICON_SETTINGS, ICON_SHARE, icon_label};
 use super::palette::{GraphPalette, Palette};
 use super::strings::{tr, tr_format};
 use super::{CalculatorApp, RADIUS, access, numbers, share};
@@ -19,10 +20,6 @@ use crate::graphing::{Env, Equation};
 
 /// The tracing button's id; it gets the focus back when Esc stops tracing.
 pub(super) const TRACE_ID: &str = "graph-trace";
-const ICON_SHARE: char = '\u{E72D}';
-const ICON_PLUS: char = '\u{E948}';
-const ICON_MINUS: char = '\u{E949}';
-const ICON_GEAR: char = '\u{E713}';
 
 /// The plots of a frame, and what they were made for: they're made again only when the
 /// view, the size, the equations or the variables change.
@@ -599,7 +596,7 @@ impl CalculatorApp {
         .on_hover_text(tr("shareButton.ToolTip"));
         let (fill, color) = panel_button_colors(p, &response, false);
         painter.rect_filled(r, RADIUS, fill);
-        let icon = painter.layout_job(self.icon(ICON_SHARE, "⇪", 16.0));
+        let icon = painter.layout_job(icon_label(ICON_SHARE, 16.0));
         painter.galley(r.center() - icon.size() / 2.0, icon, color);
         if response.clicked() {
             self.graphing.capture = Capture::Requested(Purpose::Share);
@@ -622,7 +619,7 @@ impl CalculatorApp {
         let (fill, color) = panel_button_colors(p, &response, false);
         painter.rect_filled(r, RADIUS, if open { p.subtle_hover } else { fill });
         paint_graph_icon(&painter, r.center() - vec2(1.0, 1.0), 15.0, color);
-        let gear = painter.layout_job(self.icon(ICON_GEAR, "⚙", 9.0));
+        let gear = painter.layout_job(icon_label(ICON_SETTINGS, 9.0));
         painter.rect_filled(
             Rect::from_center_size(r.center() + vec2(5.0, 4.5), vec2(9.0, 9.0)),
             4.5,
@@ -658,17 +655,15 @@ impl CalculatorApp {
         let size = (rect.width(), rect.height());
         for (i, zoom_in) in [(0.0, true), (1.0, false)] {
             let r = cell(bottom, i, true);
-            let (glyph, fallback, key, tip) = if zoom_in {
+            let (glyph, key, tip) = if zoom_in {
                 (
                     ICON_PLUS,
-                    "+",
                     "zoomInButton.AutomationName",
                     "zoomInButton.ToolTip",
                 )
             } else {
                 (
                     ICON_MINUS,
-                    "−",
                     "zoomOutButton.AutomationName",
                     "zoomOutButton.ToolTip",
                 )
@@ -679,7 +674,7 @@ impl CalculatorApp {
                     .on_hover_text(tr(tip));
             let (fill, color) = panel_button_colors(p, &response, false);
             painter.rect_filled(r, RADIUS, fill);
-            let icon = painter.layout_job(self.icon(glyph, fallback, 14.0));
+            let icon = painter.layout_job(icon_label(glyph, 14.0));
             painter.galley(r.center() - icon.size() / 2.0, icon, color);
             let down = response.is_pointer_button_down_on();
             if response.drag_started() || (down && self.graphing.zoom_held.is_none()) {

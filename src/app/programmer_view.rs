@@ -12,12 +12,15 @@ use eframe::egui::{
 
 use super::converter_view::star_rows;
 use super::date_view::popup_frame;
+use super::icons::{
+    self, ICON_BACKSPACE, ICON_CHEVRON_DOWN, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT, ICON_DIVIDE,
+    ICON_EQUALS, ICON_MINUS, ICON_MULTIPLY, ICON_PLUS, icon_label,
+};
 use super::strings::{tr, tr_format};
 use super::{
-    CalculatorApp, ContextMenu, Flyout, FlyoutAction, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN,
-    ICON_DIVIDE, ICON_EQUALS, ICON_MINUS, ICON_MULTIPLY, ICON_PLUS, Kind, MARGIN,
-    MEMORY_BUTTON_MAX_WIDTH, MenuTarget, Panel, RADIUS, access, command_name, icons, negate_label,
-    numbers, paint_radio, semibold, text,
+    CalculatorApp, ContextMenu, Flyout, FlyoutAction, GAP, Kind, MARGIN, MEMORY_BUTTON_MAX_WIDTH,
+    MenuTarget, Panel, RADIUS, access, command_name, negate_label, numbers, paint_radio, semibold,
+    text,
 };
 use crate::engine::{Calculator, Command, Func, Op, Radix, WordSize};
 
@@ -35,9 +38,7 @@ fn results_size(window_height: f32) -> (f32, f32, f32) {
         (26.0, 42.0, 42.0)
     }
 }
-// Segoe Fluent Icons' chevrons, for the shift keys' `«` and `»`.
-const ICON_CHEVRON_LEFT: char = '\u{E76B}';
-const ICON_CHEVRON_RIGHT: char = '\u{E76C}';
+
 /// The radix list is at most this high (`MaxHeight="244"`).
 const RADIX_LIST_MAX_HEIGHT: f32 = 244.0;
 /// From this keypad size on, the keys and the menu row get larger (`Medium`, `Large`).
@@ -527,7 +528,7 @@ impl CalculatorApp {
             tr("MemoryButton_Open")
         };
         let id = Id::new("memory-list");
-        let label = self.memory_list_label();
+        let label = Self::memory_list_label();
         if self.button(
             ui,
             cell(inner.right() - column),
@@ -586,7 +587,7 @@ impl CalculatorApp {
             );
             let chevron = ui
                 .painter()
-                .layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", chevron_size));
+                .layout_job(icon_label(ICON_CHEVRON_DOWN, chevron_size));
             // Padding 8, the icon, the text and the chevron 8 px apart, padding 8.
             let width = 8.0 + glyph_size + 8.0 + galley.size().x + 8.0 + chevron.size().x + 8.0;
             let button = Rect::from_min_size(
@@ -703,18 +704,18 @@ impl CalculatorApp {
                 Decimal => text(".", digit_size, FontFamily::Proportional),
                 Function(Func::Negate) => negate_label(operator_size),
                 Operator(Op::LeftShift) | Function(Func::RotateLeft | Func::RotateLeftCarry) => {
-                    self.double_chevron(false, operator_size)
+                    Self::double_chevron(false, operator_size)
                 }
                 Operator(Op::RightShift | Op::RightShiftLogical)
                 | Function(Func::RotateRight | Func::RotateRightCarry) => {
-                    self.double_chevron(true, operator_size)
+                    Self::double_chevron(true, operator_size)
                 }
-                Operator(Op::Divide) => self.icon(ICON_DIVIDE, "÷", operator_size),
-                Operator(Op::Multiply) => self.icon(ICON_MULTIPLY, "×", operator_size),
-                Operator(Op::Subtract) => self.icon(ICON_MINUS, "−", operator_size),
-                Operator(Op::Add) => self.icon(ICON_PLUS, "+", operator_size),
-                Equals => self.icon(ICON_EQUALS, "=", operator_size),
-                Backspace => self.icon(ICON_BACKSPACE, "⌫", operator_size),
+                Operator(Op::Divide) => icon_label(ICON_DIVIDE, operator_size),
+                Operator(Op::Multiply) => icon_label(ICON_MULTIPLY, operator_size),
+                Operator(Op::Subtract) => icon_label(ICON_MINUS, operator_size),
+                Operator(Op::Add) => icon_label(ICON_PLUS, operator_size),
+                Equals => icon_label(ICON_EQUALS, operator_size),
+                Backspace => icon_label(ICON_BACKSPACE, operator_size),
                 Operator(Op::Mod) => text("%", operator_size, FontFamily::Proportional),
                 OpenParen => text("(", operator_size, FontFamily::Proportional),
                 CloseParen => text(")", operator_size, FontFamily::Proportional),
@@ -975,20 +976,16 @@ impl CalculatorApp {
         }
     }
 
-    /// The shift keys' `«` and `»`: two of Segoe Fluent's chevrons close together, like
-    /// the Calculator font's glyphs.
-    fn double_chevron(&self, right: bool, size: f32) -> LayoutJob {
-        if !self.has_icons {
-            let label = if right { "»" } else { "«" };
-            return text(label, size, FontFamily::Proportional);
-        }
+    /// The shift keys' `«` and `»`: two chevron icons close together, like the Calculator
+    /// font's glyphs.
+    fn double_chevron(right: bool, size: f32) -> LayoutJob {
         let glyph = if right {
             ICON_CHEVRON_RIGHT
         } else {
             ICON_CHEVRON_LEFT
         };
         let mut job = LayoutJob::default();
-        let mut format = super::format(size * 0.85, icons());
+        let mut format = super::format(size * 0.85, icons::family());
         // egui adds the spacing between the glyphs of one section.
         format.extra_letter_spacing = -size * 0.55;
         job.append(&format!("{glyph}{glyph}"), 0.0, format);
@@ -996,18 +993,14 @@ impl CalculatorApp {
     }
 
     /// The label of the `M˅` button that opens the memory flyout.
-    pub(super) fn memory_list_label(&self) -> LayoutJob {
+    pub(super) fn memory_list_label() -> LayoutJob {
         let mut label = text("M", 12.0, semibold());
-        if self.has_icons {
-            label.append(" ", 0.0, super::format(6.0, FontFamily::Proportional));
-            label.append(
-                &ICON_CHEVRON_DOWN.to_string(),
-                0.0,
-                super::format(8.0, icons()),
-            );
-        } else {
-            label.append("˅", 0.0, super::format(12.0, FontFamily::Proportional));
-        }
+        label.append(" ", 0.0, super::format(6.0, FontFamily::Proportional));
+        label.append(
+            &ICON_CHEVRON_DOWN.to_string(),
+            0.0,
+            super::format(8.0, icons::family()),
+        );
         label
     }
 }

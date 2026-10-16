@@ -18,12 +18,14 @@ use eframe::egui::{
 };
 
 use super::date_view::popup_frame;
+use super::icons::{
+    ICON_BACK, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP, ICON_COPY, ICON_CUT, ICON_DELETE, ICON_HIDE,
+    ICON_LIGHTNING, ICON_MULTIPLY, ICON_PASTE, ICON_REMOVE, ICON_THEME, ICON_UNDO, ICON_VIEW,
+    ICON_WARNING, icon_label,
+};
 use super::palette::{DARK_GRAPH, GraphPalette, LIGHT_GRAPH};
 use super::strings::{tr, tr_format};
-use super::{
-    CalculatorApp, HEADER_HEIGHT, ICON_BACK, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP, ICON_DELETE,
-    ICON_MULTIPLY, ICON_THEME, Kind, RADIUS, access, numbers, radio_button, semibold,
-};
+use super::{CalculatorApp, HEADER_HEIGHT, Kind, RADIUS, access, numbers, radio_button, semibold};
 use crate::engine::Angle;
 use crate::graphing::analysis::{self, AnalysisError, Features, Period};
 use crate::graphing::plot::{LineStyle, View};
@@ -41,16 +43,6 @@ const COLOR_ORDER: [usize; 14] = [0, 3, 7, 10, 1, 4, 8, 11, 2, 5, 9, 12, 6, 13];
 /// An equation box's height (`MinHeight="44"`), and its buttons' width.
 const ROW_HEIGHT: f32 = 44.0;
 const ROW_BUTTON: f32 = 38.0;
-/// Segoe Fluent Icons used here only.
-const ICON_LIGHTNING: char = '\u{E945}';
-const ICON_VIEW: char = '\u{E890}';
-const ICON_HIDE: char = '\u{ED1A}';
-const ICON_WARNING: char = '\u{E7BA}';
-const ICON_REMOVE: char = '\u{ECC9}';
-const ICON_CUT: char = '\u{E8C6}';
-const ICON_PASTE: char = '\u{E77F}';
-const ICON_UNDO: char = '\u{E7A7}';
-pub(super) const ICON_COPY: char = super::ICON_COPY;
 
 /// The stored "Graph theme" choice (`IsGraphThemeMatchApp`, Windows' own setting name).
 pub(super) const THEME_KEY: &str = "IsGraphThemeMatchApp";
@@ -1004,7 +996,7 @@ impl CalculatorApp {
             };
             painter.rect_filled(button, RADIUS, overlay.gamma_multiply(opacity));
             let glyph = if visible { ICON_HIDE } else { ICON_VIEW };
-            let icon = painter.layout_job(self.icon(glyph, if visible { "–" } else { "◉" }, 16.0));
+            let icon = painter.layout_job(icon_label(glyph, 16.0));
             painter.galley(button.center() - icon.size() / 2.0, icon, text_color);
             let tip = if visible {
                 tr("hideEquationButtonToolTip")
@@ -1035,7 +1027,7 @@ impl CalculatorApp {
         let mut actions = RowActions::default();
         if focused && !empty {
             let r = slot(ROW_BUTTON);
-            let label = self.icon(ICON_MULTIPLY, "×", 12.0);
+            let label = icon_label(ICON_MULTIPLY, 12.0);
             if self.button(
                 ui,
                 r,
@@ -1050,7 +1042,7 @@ impl CalculatorApp {
         } else if hovered && !focused {
             if !last {
                 let r = slot(ROW_BUTTON);
-                let label = self.icon(ICON_DELETE, "✕", 14.0);
+                let label = icon_label(ICON_DELETE, 14.0);
                 let name = tr("removeButton.AutomationName");
                 let response_rect = r;
                 if self.button(
@@ -1073,7 +1065,7 @@ impl CalculatorApp {
             }
             if error.is_none() && !add_mode {
                 let r = slot(ROW_BUTTON);
-                let label = self.icon(ICON_THEME, "◐", 14.0);
+                let label = icon_label(ICON_THEME, 14.0);
                 let name = tr("colorChooserButton.AutomationName");
                 if self.button(
                     ui,
@@ -1093,7 +1085,7 @@ impl CalculatorApp {
                     tr("colorChooserButton.ToolTip"),
                 );
                 let r = slot(ROW_BUTTON);
-                let label = self.icon(ICON_LIGHTNING, "ƒ", 14.0);
+                let label = icon_label(ICON_LIGHTNING, 14.0);
                 let name = tr("functionAnalysisButton.AutomationName");
                 let enabled = !self.graphing.rows[index].submitted.is_empty();
                 if self.button(
@@ -1119,7 +1111,7 @@ impl CalculatorApp {
             && !focused
         {
             let r = slot(32.0);
-            let icon = painter.layout_job(self.icon(ICON_WARNING, "⚠", 16.0));
+            let icon = painter.layout_job(icon_label(ICON_WARNING, 16.0));
             painter.galley(r.center() - icon.size() / 2.0, icon, p.critical);
             let message = tr(error.key());
             let response = ui.interact(r, Id::new("graph-eq-error").with(id), Sense::hover());
@@ -1386,7 +1378,7 @@ impl CalculatorApp {
         } else {
             ICON_CHEVRON_DOWN
         };
-        let label = self.icon(glyph, if open { "˄" } else { "˅" }, 9.0);
+        let label = icon_label(glyph, 9.0);
         let name_text = tr("VariableAreaSettings.AutomationName");
         let toggled = self.button(
             ui,
@@ -1630,7 +1622,7 @@ impl CalculatorApp {
             painter.rect_filled(back, RADIUS, overlay.gamma_multiply(opacity));
         }
         let fg = Color32::WHITE;
-        let arrow = painter.layout_job(self.icon(ICON_BACK, "←", 16.0));
+        let arrow = painter.layout_job(icon_label(ICON_BACK, 16.0));
         painter.galley(
             pos2(back.left() + 10.0, back.center().y - arrow.size().y / 2.0),
             arrow,
@@ -1951,7 +1943,7 @@ impl CalculatorApp {
             combo.center().y,
             Stroke::new(self.graphing.line_width, p.text),
         );
-        let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", 12.0));
+        let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, 12.0));
         painter.galley(
             pos2(
                 combo.right() - 26.0,
@@ -2242,7 +2234,7 @@ impl CalculatorApp {
             style,
             line_color,
         );
-        let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", 12.0));
+        let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, 12.0));
         painter.galley(
             pos2(
                 combo.right() - 26.0,
@@ -2567,7 +2559,7 @@ impl CalculatorApp {
             }
             let color = if *enabled { p.text } else { p.text_disabled };
             if let Some(icon) = icon {
-                let galley = painter.layout_job(self.icon(*icon, "", 16.0));
+                let galley = painter.layout_job(icon_label(*icon, 16.0));
                 painter.galley(
                     pos2(item.left() + 12.0, item.center().y - galley.size().y / 2.0),
                     galley,

@@ -10,11 +10,14 @@ use eframe::egui::{
 
 use super::converter_view::star_rows;
 use super::date_view::popup_frame;
+use super::icons::{
+    ICON_BACKSPACE, ICON_CHEVRON_DOWN, ICON_DIVIDE, ICON_EQUALS, ICON_MINUS, ICON_MULTIPLY,
+    ICON_PLUS, icon_label,
+};
 use super::strings::{tr, tr_format};
 use super::{
-    CalculatorApp, Flyout, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, ICON_DIVIDE, ICON_EQUALS,
-    ICON_MINUS, ICON_MULTIPLY, ICON_PLUS, Kind, MARGIN, MEMORY_BUTTON_MAX_WIDTH, Panel, RADIUS,
-    access, command_name, format, negate_label, semibold, symbols, text,
+    CalculatorApp, Flyout, GAP, Kind, MARGIN, MEMORY_BUTTON_MAX_WIDTH, Panel, RADIUS, access,
+    command_name, format, negate_label, semibold, symbols, text,
 };
 use crate::engine::{Angle, Calculator, Command, Func, Op, Trig, TrigFunction};
 
@@ -431,7 +434,7 @@ impl CalculatorApp {
             );
             let chevron = ui
                 .painter()
-                .layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", chevron_size));
+                .layout_job(icon_label(ICON_CHEVRON_DOWN, chevron_size));
             // Padding 8, the icon, the text and the chevron 8 px apart, padding 8.
             let width = 8.0 + glyph_size + 8.0 + galley.size().x + 8.0 + chevron.size().x + 8.0;
             let button = Rect::from_min_size(
@@ -634,10 +637,10 @@ impl CalculatorApp {
             Command::Decimal => text(".", sizes.digit, FontFamily::Proportional),
             Command::Function(Func::Negate) => negate_label(sizes.negate),
             Command::Function(func) => function_label(func, size),
-            Command::Operator(Op::Divide) => self.icon(ICON_DIVIDE, "÷", size),
-            Command::Operator(Op::Multiply) => self.icon(ICON_MULTIPLY, "×", size),
-            Command::Operator(Op::Subtract) => self.icon(ICON_MINUS, "−", size),
-            Command::Operator(Op::Add) => self.icon(ICON_PLUS, "+", size),
+            Command::Operator(Op::Divide) => icon_label(ICON_DIVIDE, size),
+            Command::Operator(Op::Multiply) => icon_label(ICON_MULTIPLY, size),
+            Command::Operator(Op::Subtract) => icon_label(ICON_MINUS, size),
+            Command::Operator(Op::Add) => icon_label(ICON_PLUS, size),
             Command::Operator(Op::Mod) => plain("mod"),
             Command::Operator(Op::Power) => superscript(italic("x", size), "y", size),
             Command::Operator(Op::Root) => {
@@ -654,8 +657,8 @@ impl CalculatorApp {
                 job
             }
             Command::Operator(Op::LogBase) => log_base_label(size),
-            Command::Equals => self.icon(ICON_EQUALS, "=", size),
-            Command::Backspace => self.icon(ICON_BACKSPACE, "⌫", size),
+            Command::Equals => icon_label(ICON_EQUALS, size),
+            Command::Backspace => icon_label(ICON_BACKSPACE, size),
             Command::Pi => plain("π"),
             Command::Euler => plain("e"),
             Command::Exponent => plain("exp"),

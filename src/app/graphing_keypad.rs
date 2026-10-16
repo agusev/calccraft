@@ -12,18 +12,17 @@ use eframe::egui::{
 
 use super::date_view::popup_frame;
 use super::graphing_view::{KeypadMenu, Popup, edit_id, insert_text, region_syntax};
+use super::icons::{
+    ICON_BACKSPACE, ICON_CHEVRON_DOWN, ICON_DIVIDE, ICON_EQUALS, ICON_MINUS, ICON_MULTIPLY,
+    ICON_PLUS, ICON_RETURN, icon_label,
+};
 use super::scientific_view::{
     Sizes, function_label, italic, log_base_label, paint_triangle_icon, second_label, superscript,
     symbol_formula, trig_label,
 };
 use super::strings::tr;
-use super::{
-    CalculatorApp, GAP, ICON_BACKSPACE, ICON_CHEVRON_DOWN, ICON_DIVIDE, ICON_EQUALS, ICON_MINUS,
-    ICON_MULTIPLY, ICON_PLUS, Kind, RADIUS, access, text,
-};
+use super::{CalculatorApp, GAP, Kind, RADIUS, access, text};
 use crate::engine::{Func, Trig, TrigFunction};
-
-const ICON_RETURN: char = '\u{E751}';
 
 /// A key of the keypad.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,7 +63,7 @@ impl CalculatorApp {
                 FontId::proportional(menu_font),
                 Color32::PLACEHOLDER,
             );
-            let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", chevron_size));
+            let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, chevron_size));
             let width = 8.0 + glyph_size + 8.0 + galley.size().x + 8.0 + chevron.size().x + 8.0;
             let button = Rect::from_min_size(
                 pos2(left + 1.0, menu_row.top() + 1.0),
@@ -212,11 +211,11 @@ impl CalculatorApp {
         match (i, key) {
             (_, GraphKey::Clear) => (plain("C"), tr("clearButton.AutomationName")),
             (_, GraphKey::Backspace) => (
-                self.icon(ICON_BACKSPACE, "⌫", size),
+                icon_label(ICON_BACKSPACE, size),
                 tr("backSpaceButton.AutomationName"),
             ),
             (_, GraphKey::Submit) => (
-                self.icon(ICON_RETURN, "↵", size),
+                icon_label(ICON_RETURN, size),
                 tr("submitButton.AutomationName"),
             ),
             (1, _) => (plain("π"), tr("piButton.AutomationName")),
@@ -234,11 +233,11 @@ impl CalculatorApp {
             (11, _) => (plain("("), tr("openParenthesisButton.AutomationName")),
             (12, _) => (plain(")"), tr("closeParenthesisButton.AutomationName")),
             (13, _) => (
-                self.icon(ICON_EQUALS, "=", size),
+                icon_label(ICON_EQUALS, size),
                 tr("graphingEqualButton.AutomationName"),
             ),
             (14, _) => (
-                self.icon(ICON_DIVIDE, "÷", size),
+                icon_label(ICON_DIVIDE, size),
                 tr("divideButton.AutomationName"),
             ),
             (15, GraphKey::Type("^", ..)) => (
@@ -259,7 +258,7 @@ impl CalculatorApp {
                 (job, tr("ySquareRootButton.AutomationName"))
             }
             (19, _) => (
-                self.icon(ICON_MULTIPLY, "×", size),
+                icon_label(ICON_MULTIPLY, size),
                 tr("multiplyButton.AutomationName"),
             ),
             (20, GraphKey::Type("10^", ..)) => {
@@ -267,17 +266,14 @@ impl CalculatorApp {
             }
             (20, _) => (f(Func::TwoToX), tr("twoPowerXButton.AutomationName")),
             (24, _) => (
-                self.icon(ICON_MINUS, "−", size),
+                icon_label(ICON_MINUS, size),
                 tr("minusButton.AutomationName"),
             ),
             (25, GraphKey::Type("log()", ..)) => {
                 (plain("log"), tr("logBase10Button.AutomationName"))
             }
             (25, _) => (log_base_label(size), tr("logBaseY.AutomationName")),
-            (29, _) => (
-                self.icon(ICON_PLUS, "+", size),
-                tr("plusButton.AutomationName"),
-            ),
+            (29, _) => (icon_label(ICON_PLUS, size), tr("plusButton.AutomationName")),
             (30, GraphKey::Type("ln()", ..)) => (plain("ln"), tr("logBaseEButton.AutomationName")),
             (30, _) => (f(Func::EToX), tr("powerOfEButton.AutomationName")),
             (31, _) => (

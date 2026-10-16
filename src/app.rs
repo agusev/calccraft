@@ -6,6 +6,7 @@ mod date_view;
 mod graph_canvas;
 mod graphing_keypad;
 mod graphing_view;
+mod icons;
 mod palette;
 mod programmer_view;
 mod region;
@@ -25,56 +26,15 @@ use eframe::egui::{
 
 use crate::converter::Category;
 use crate::engine::{Angle, Calculator, Command, Func, Op, Radix};
+use icons::{
+    ICON_BACK, ICON_BACK_TO_FULL, ICON_BACKSPACE, ICON_CALCULATOR, ICON_CALENDAR,
+    ICON_CHEVRON_DOWN, ICON_CHEVRON_UP, ICON_CODE, ICON_COPY, ICON_DELETE, ICON_DIVIDE,
+    ICON_EQUALS, ICON_HISTORY, ICON_KEEP_ON_TOP, ICON_LANGUAGE, ICON_MENU, ICON_MINUS,
+    ICON_MULTIPLY, ICON_PLUS, ICON_REGION, ICON_SCIENTIFIC, ICON_SETTINGS, ICON_THEME,
+    category_icon, icon_label,
+};
 use palette::Palette;
 use strings::{tr, tr_format};
-
-// Glyphs from the Segoe Fluent Icons / Segoe MDL2 Assets fonts.
-const ICON_MENU: char = '\u{E700}';
-const ICON_CHEVRON_DOWN: char = '\u{E70D}';
-const ICON_CHEVRON_UP: char = '\u{E70E}';
-const ICON_SETTINGS: char = '\u{E713}';
-const ICON_BACK: char = '\u{E72B}';
-const ICON_DELETE: char = '\u{E74D}';
-const ICON_THEME: char = '\u{E790}';
-const ICON_HISTORY: char = '\u{E81C}';
-const ICON_CALENDAR: char = '\u{E787}';
-const ICON_COPY: char = '\u{E8C8}';
-const ICON_CALCULATOR: char = '\u{E8EF}';
-/// The Programmer mode in the menu, `</>`. Windows draws it from the Calculator's own
-/// icon font, which only Windows may use.
-const ICON_CODE: char = '\u{E943}';
-/// The Scientific mode in the menu (`NavCategory`'s glyph, which Segoe Fluent Icons has).
-const ICON_SCIENTIFIC: char = '\u{F196}';
-const ICON_MULTIPLY: char = '\u{E947}';
-const ICON_PLUS: char = '\u{E948}';
-const ICON_MINUS: char = '\u{E949}';
-const ICON_DIVIDE: char = '\u{E94A}';
-const ICON_EQUALS: char = '\u{E94E}';
-const ICON_BACKSPACE: char = '\u{E94F}';
-const ICON_KEEP_ON_TOP: char = '\u{EE49}';
-const ICON_BACK_TO_FULL: char = '\u{EE47}';
-const ICON_LANGUAGE: char = '\u{F2B7}';
-const ICON_REGION: char = '\u{E909}';
-
-/// The converters' icons in the navigation menu. Windows draws Volume, Weight,
-/// Temperature, Speed, Data and Angle from the Calculator's own icon font, which
-/// may only be used inside Windows, so those use similar Segoe Fluent Icons glyphs.
-fn category_icon(category: Category) -> char {
-    match category {
-        Category::Volume => '\u{F158}',
-        Category::Length => '\u{ECC6}',
-        Category::Weight => '\u{E821}',
-        Category::Temperature => '\u{E9CA}',
-        Category::Energy => '\u{ECAD}',
-        Category::Area => '\u{E809}',
-        Category::Speed => '\u{E805}',
-        Category::Time => '\u{E917}',
-        Category::Power => '\u{E945}',
-        Category::Data => '\u{EDA2}',
-        Category::Pressure => '\u{EC4A}',
-        Category::Angle => '\u{F461}',
-    }
-}
 
 /// A converter's name, from its resource key in Windows (`NavCategory`'s
 /// `NameResourceKey` with "Text" added).
@@ -436,8 +396,6 @@ pub struct CalculatorApp {
     /// "Keep on top" mode: a small always-on-top window without the memory row.
     compact: bool,
     full_size: Option<egui::Vec2>,
-    /// Whether the Windows icon font was found.
-    has_icons: bool,
     /// Command triggered from the keyboard and when, to highlight its button.
     key_flash: Option<(Command, f64)>,
     page: Page,
@@ -493,7 +451,7 @@ impl CalculatorApp {
         let language = strings::set_language(language_choice.as_deref());
         let region = &region::set_region(region_choice.as_deref()).tag;
         let script_fonts = needed_fonts(language, region, false);
-        let has_icons = setup_fonts(&cc.egui_ctx, &script_fonts);
+        setup_fonts(&cc.egui_ctx, &script_fonts);
         let icon = window_icon();
         let app_icon = cc.egui_ctx.load_texture(
             "app-icon",
@@ -531,7 +489,6 @@ impl CalculatorApp {
             context_menu: None,
             compact: false,
             full_size: None,
-            has_icons,
             key_flash: None,
             page: Page::Calculator,
             theme,
@@ -991,15 +948,6 @@ impl CalculatorApp {
         painter.galley(rect.center() - galley.size() / 2.0, galley, text);
     }
 
-    /// A label made of one icon glyph (or fallback text without the icon font).
-    fn icon(&self, glyph: char, fallback: &str, size: f32) -> LayoutJob {
-        if self.has_icons {
-            text(&glyph.to_string(), size, icons())
-        } else {
-            text(fallback, size, FontFamily::Proportional)
-        }
-    }
-
     // ---------------------------------------------------------------- header
 
     fn draw_header(&mut self, ui: &Ui, rect: Rect) {
@@ -1009,7 +957,7 @@ impl CalculatorApp {
         let icon_button = |x: f32| Rect::from_center_size(pos2(x, y), vec2(40.0, 36.0));
 
         if self.compact {
-            let label = self.icon(ICON_BACK_TO_FULL, "⇱", 14.0);
+            let label = icon_label(ICON_BACK_TO_FULL, 14.0);
             if self.button(
                 ui,
                 icon_button(rect.left() + 24.0),
@@ -1024,7 +972,7 @@ impl CalculatorApp {
             return;
         }
 
-        let label = self.icon(ICON_MENU, "≡", 16.0);
+        let label = icon_label(ICON_MENU, 16.0);
         if self.button(
             ui,
             icon_button(rect.left() + 24.0),
@@ -1048,7 +996,7 @@ impl CalculatorApp {
         // Keep on top exists only in the Standard mode, the history in the Standard and
         // Scientific modes, and its button only while the history isn't docked.
         if self.mode == Mode::Standard {
-            let label = self.icon(ICON_KEEP_ON_TOP, "⇲", 14.0);
+            let label = icon_label(ICON_KEEP_ON_TOP, 14.0);
             let keep_on_top = icon_button(title.right() + 26.0);
             if self.button(
                 ui,
@@ -1066,7 +1014,7 @@ impl CalculatorApp {
             return;
         }
 
-        let label = self.icon(ICON_HISTORY, "↺", 16.0);
+        let label = icon_label(ICON_HISTORY, 16.0);
         let name = if self.flyout == Flyout::History {
             tr("HistoryButton_Close")
         } else {
@@ -1208,7 +1156,7 @@ impl CalculatorApp {
         }
 
         let enabled = !self.engine().memory().is_empty() && !self.engine().has_error();
-        let label = self.memory_list_label();
+        let label = Self::memory_list_label();
         let name = if self.flyout == Flyout::Memory {
             tr("MemoryButton_Close")
         } else {
@@ -1251,12 +1199,12 @@ impl CalculatorApp {
             Command::Function(Func::Reciprocal) => formula("¹⁄", ""),
             Command::Function(Func::Square) => formula("", "²"),
             Command::Function(Func::SquareRoot) => formula("²√", ""),
-            Command::Operator(Op::Divide) => self.icon(ICON_DIVIDE, "÷", icon_size),
-            Command::Operator(Op::Multiply) => self.icon(ICON_MULTIPLY, "×", icon_size),
-            Command::Operator(Op::Subtract) => self.icon(ICON_MINUS, "−", icon_size),
-            Command::Operator(Op::Add) => self.icon(ICON_PLUS, "+", icon_size),
-            Command::Equals => self.icon(ICON_EQUALS, "=", icon_size),
-            Command::Backspace => self.icon(ICON_BACKSPACE, "⌫", icon_size),
+            Command::Operator(Op::Divide) => icon_label(ICON_DIVIDE, icon_size),
+            Command::Operator(Op::Multiply) => icon_label(ICON_MULTIPLY, icon_size),
+            Command::Operator(Op::Subtract) => icon_label(ICON_MINUS, icon_size),
+            Command::Operator(Op::Add) => icon_label(ICON_PLUS, icon_size),
+            Command::Equals => icon_label(ICON_EQUALS, icon_size),
+            Command::Backspace => icon_label(ICON_BACKSPACE, icon_size),
             Command::Percent => text("%", text_size, regular),
             Command::ClearEntry => text("CE", text_size, regular),
             Command::Clear => text("C", text_size, regular),
@@ -1466,7 +1414,7 @@ impl CalculatorApp {
             pos2(rect.right() - 28.0, rect.bottom() - 24.0),
             vec2(40.0, 36.0),
         );
-        let label = self.icon(ICON_DELETE, "🗑", 15.0);
+        let label = icon_label(ICON_DELETE, 15.0);
         let name = if history {
             tr("ClearHistory.AutomationName")
         } else {
@@ -1663,12 +1611,12 @@ impl CalculatorApp {
         let items = match menu.target {
             MenuTarget::History(i) => vec![
                 (
-                    self.icon(ICON_COPY, "⧉", 16.0),
+                    icon_label(ICON_COPY, 16.0),
                     tr("CopyHistoryMenuItem.Text"),
                     FlyoutAction::CopyHistory(i),
                 ),
                 (
-                    self.icon(ICON_DELETE, "🗑", 16.0),
+                    icon_label(ICON_DELETE, 16.0),
                     tr("DeleteHistoryMenuItem.Text"),
                     FlyoutAction::DeleteHistory(i),
                 ),
@@ -1691,7 +1639,7 @@ impl CalculatorApp {
                 ),
             ],
             MenuTarget::Radix(radix) => vec![(
-                self.icon(ICON_COPY, "⧉", 16.0),
+                icon_label(ICON_COPY, 16.0),
                 tr("copyMenuItem"),
                 FlyoutAction::CopyRadix(radix),
             )],
@@ -1791,7 +1739,7 @@ impl CalculatorApp {
             pos2(panel.left() + 24.0, panel.top() + HEADER_HEIGHT / 2.0),
             vec2(40.0, 36.0),
         );
-        let label = self.icon(ICON_MENU, "≡", 16.0);
+        let label = icon_label(ICON_MENU, 16.0);
         let id = Id::new("nav-menu");
         let mut close = self.button(ui, menu, id, Kind::Subtle, true, label, NAVIGATION_CLOSE);
 
@@ -1843,15 +1791,13 @@ impl CalculatorApp {
                         let (row, _) = ui.allocate_exact_size(size, Sense::hover());
                         let item = row.shrink2(vec2(4.0, 0.0));
                         let icon = match mode {
-                            Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
-                            Mode::Scientific => self.icon(ICON_SCIENTIFIC, "∫", 16.0),
+                            Mode::Standard => icon_label(ICON_CALCULATOR, 16.0),
+                            Mode::Scientific => icon_label(ICON_SCIENTIFIC, 16.0),
                             // Drawn below: Windows' comes from the Calculator's own font.
                             Mode::Graphing => LayoutJob::default(),
-                            Mode::Programmer => self.icon(ICON_CODE, "</>", 16.0),
-                            Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
-                            Mode::Converter(category) => {
-                                self.icon(category_icon(category), "▫", 16.0)
-                            }
+                            Mode::Programmer => icon_label(ICON_CODE, 16.0),
+                            Mode::DateCalculation => icon_label(ICON_CALENDAR, 16.0),
+                            Mode::Converter(category) => icon_label(category_icon(category), 16.0),
                         };
                         let id = Id::new("nav-mode").with(mode.title());
                         let selected = self.mode == mode;
@@ -1887,7 +1833,7 @@ impl CalculatorApp {
             item.top() - 12.0,
             Stroke::new(1.0, p.flyout_border),
         );
-        let icon = self.icon(ICON_SETTINGS, "⚙", 16.0);
+        let icon = icon_label(ICON_SETTINGS, 16.0);
         let label = tr("SettingsHeader.Text");
         let id = Id::new("nav-settings");
         let settings = self.nav_item(ui, item, id, icon, label, label, false, false);
@@ -1962,7 +1908,7 @@ impl CalculatorApp {
             pos2(header.left() + 24.0, header.center().y),
             vec2(40.0, 36.0),
         );
-        let label = self.icon(ICON_BACK, "←", 16.0);
+        let label = icon_label(ICON_BACK, 16.0);
         if self.button(
             ui,
             back,
@@ -2182,7 +2128,7 @@ impl CalculatorApp {
             Stroke::new(1.0, p.card_border),
             StrokeKind::Inside,
         );
-        let icon = painter.layout_job(self.icon(ICON_THEME, "◐", 20.0));
+        let icon = painter.layout_job(icon_label(ICON_THEME, 20.0));
         painter.galley(
             pos2(card.left() + ICON_X, header.center().y) - icon.size() / 2.0,
             icon,
@@ -2197,9 +2143,9 @@ impl CalculatorApp {
             p.text_secondary,
         );
         let chevron = if self.theme_expanded {
-            self.icon(ICON_CHEVRON_UP, "˄", 12.0)
+            icon_label(ICON_CHEVRON_UP, 12.0)
         } else {
-            self.icon(ICON_CHEVRON_DOWN, "˅", 12.0)
+            icon_label(ICON_CHEVRON_DOWN, 12.0)
         };
         let chevron = painter.layout_job(chevron);
         painter.galley(
@@ -2236,11 +2182,13 @@ impl CalculatorApp {
         for (card, card_top) in combo_cards.iter().zip([language_top, region_top]) {
             let rect =
                 Rect::from_min_size(pos2(left, top + card_top), vec2(right - left, card.height));
-            let (glyph, fallback) = match card.list {
-                SettingsList::Language => (ICON_LANGUAGE, "A"),
-                SettingsList::Region => (ICON_REGION, "◍"),
-            };
-            let icon = self.icon(glyph, fallback, 20.0);
+            let icon = icon_label(
+                match card.list {
+                    SettingsList::Language => ICON_LANGUAGE,
+                    SettingsList::Region => ICON_REGION,
+                },
+                20.0,
+            );
             if let Some(anchor) = self.draw_combo_card(ui, &painter, rect, card, icon) {
                 action = Some(SettingsAction::OpenList(card.list, anchor));
             }
@@ -2385,7 +2333,7 @@ impl CalculatorApp {
             field.center().y - card.value.size().y / 2.0,
         );
         painter.galley(value_pos, card.value.clone(), p.text);
-        let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", 12.0));
+        let chevron = painter.layout_job(icon_label(ICON_CHEVRON_DOWN, 12.0));
         let chevron_center = pos2(field.right() - 18.0, field.center().y);
         painter.galley(
             chevron_center - chevron.size() / 2.0,
@@ -2736,10 +2684,6 @@ fn light() -> FontFamily {
 /// Segoe UI Symbol, for the pictures of the converters' everyday comparisons.
 fn symbols() -> FontFamily {
     FontFamily::Name("symbols".into())
-}
-
-fn icons() -> FontFamily {
-    FontFamily::Name("icons".into())
 }
 
 /// Text without a color: the color is picked at paint time from the button state.
@@ -3124,60 +3068,67 @@ fn needed_fonts(language: &str, region: &str, all: bool) -> Vec<strings::ScriptF
     fonts
 }
 
-/// Loads Windows fonts: Segoe UI, Segoe UI Semibold and the icon font, and the fonts for
-/// scripts that Segoe UI doesn't have (files in the Fonts folder and their index in a
-/// collection). Returns `true` if the icon font was found.
-fn setup_fonts(ctx: &Context, script_fonts: &[strings::ScriptFont]) -> bool {
+/// Inter, the text font where Segoe UI is missing (on other systems, or a Windows without
+/// it). It's a variable font, so one file has every weight. SIL Open Font License, see
+/// `assets/fonts/README.md`.
+const INTER: &[u8] = include_bytes!("../assets/fonts/Inter.ttf");
+
+/// Loads the fonts: Segoe UI in its regular, semibold and light weights (or Inter at the same
+/// weights where a Segoe UI file is missing), Segoe UI Symbol, the embedded icon font, and the
+/// fonts for scripts that Segoe UI doesn't have (files in the Fonts folder and their index in
+/// a collection).
+fn setup_fonts(ctx: &Context, script_fonts: &[strings::ScriptFont]) {
     let dir =
         std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))
             .join("Fonts");
     let load = |file: &str| std::fs::read(dir.join(file)).ok();
+    let segoe_or_inter = |file: &str, weight: f32| match load(file) {
+        Some(data) => egui::FontData::from_owned(data),
+        None => egui::FontData::from_static(INTER).tweak(egui::FontTweak {
+            coords: egui::epaint::text::VariationCoords::new([("wght", weight)]),
+            ..Default::default()
+        }),
+    };
 
     let mut fonts = egui::FontDefinitions::default();
-    let mut add = |name: &str, data: Vec<u8>| {
-        fonts
-            .font_data
-            .insert(name.to_owned(), Arc::new(egui::FontData::from_owned(data)));
+    let mut add = |name: &str, data: egui::FontData| {
+        fonts.font_data.insert(name.to_owned(), Arc::new(data));
         name.to_owned()
     };
-    let regular = load("segoeui.ttf").map(|d| add("segoe", d));
-    let semibold_font = load("seguisb.ttf").map(|d| add("segoe-semibold", d));
-    let light_font = load("segoeuil.ttf").map(|d| add("segoe-light", d));
-    let symbol_font = load("seguisym.ttf").map(|d| add("segoe-symbol", d));
-    let icon_font = load("SegoeIcons.ttf")
-        .or_else(|| load("segmdl2.ttf"))
-        .map(|d| add("icons", d));
-    let has_icons = icon_font.is_some();
+    let regular = add("regular", segoe_or_inter("segoeui.ttf", 400.0));
+    let semibold_font = add("semibold", segoe_or_inter("seguisb.ttf", 600.0));
+    let light_font = add("light", segoe_or_inter("segoeuil.ttf", 300.0));
+    let symbol_font = load("seguisym.ttf").map(|d| add("symbols", egui::FontData::from_owned(d)));
+    let icon_font = add("icons", egui::FontData::from_static(icons::FONT));
     let scripts: Vec<String> = script_fonts
         .iter()
         .filter_map(|&(file, index)| {
             let mut font = egui::FontData::from_owned(load(file)?);
             font.index = index;
-            let name = format!("script-{file}");
-            fonts.font_data.insert(name.clone(), Arc::new(font));
-            Some(name)
+            Some(add(&format!("script-{file}"), font))
         })
         .collect();
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
-    if let Some(name) = regular {
-        proportional.insert(0, name);
-    }
+    proportional.insert(0, regular);
     // Right after Segoe UI, so the scripts' characters come from them and not from egui's
     // own fallback fonts.
     for (i, name) in scripts.into_iter().enumerate() {
-        proportional.insert((1 + i).min(proportional.len()), name);
+        proportional.insert(1 + i, name);
     }
     let fallback = proportional.clone();
     let family =
         |first: Option<String>| first.into_iter().chain(fallback.iter().cloned()).collect();
-    fonts.families.insert(semibold(), family(semibold_font));
-    fonts.families.insert(light(), family(light_font));
+    fonts
+        .families
+        .insert(semibold(), family(Some(semibold_font)));
+    fonts.families.insert(light(), family(Some(light_font)));
     fonts.families.insert(symbols(), family(symbol_font));
-    fonts.families.insert(icons(), family(icon_font));
+    fonts
+        .families
+        .insert(icons::family(), family(Some(icon_font)));
 
     ctx.set_fonts(fonts);
-    has_icons
 }
 
 /// The system title bar. Like the Windows 11 calculator, the app tints it with
