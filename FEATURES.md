@@ -42,14 +42,14 @@ own `NOT_STARTED` entry.
 | **Phase 1: Core Math Engine** | 8 | 8 | 0 | 0 | 0 |
 | **Phase 2: Standard Calculator Mode** | 7 | 7 | 0 | 0 | 0 |
 | **Phase 3: Scientific Calculator Mode** | 8 | 0 | 0 | 0 | 8 |
-| **Phase 4: Programmer Calculator Mode** | 7 | 0 | 0 | 0 | 7 |
+| **Phase 4: Programmer Calculator Mode** | 8 | 8 | 0 | 0 | 0 |
 | **Phase 5: Date Calculation** | 4 | 4 | 0 | 0 | 0 |
 | **Phase 6: Unit Conversion (13 categories)** | 14 | 13 | 0 | 0 | 1 |
 | **Phase 7: Graphing Calculator** | 6 | 0 | 0 | 0 | 6 |
 | **Phase 8: Application Shell, UX & Accessibility** | 11 | 10 | 0 | 1 | 0 |
-| **TOTAL** | **65** | **42** | **0** | **1** | **22** |
+| **TOTAL** | **66** | **50** | **0** | **1** | **15** |
 
-*Last updated: 2026-10-15 (CalcCraft 0.2.0)*
+*Last updated: 2026-10-16 (CalcCraft 0.5.0)*
 
 ---
 
@@ -71,7 +71,8 @@ graph TD
 2. **Phase 2: Standard mode** (`src/app.rs`): immediate execution calculator and its UI. *Done.*
 3. **Phase 3: Scientific mode**: its keypad and UI on top of the precedence engine, trigonometry,
    powers, logarithms.
-4. **Phase 4: Programmer mode**: word sizes, radixes, bitwise logic, shifts, rotations, bit keypad.
+4. **Phase 4: Programmer mode** (`src/engine/integer.rs`, `src/app/programmer_view.rs`): word
+   sizes, radixes, bitwise logic, shifts, rotations, bit keypad. *Done.*
 5. **Phase 5: Date calculation** (`src/dates.rs`, `src/app/date_view.rs`). *Done.*
 6. **Phase 6: Unit converters** (`src/converter.rs`, `src/app/converter_view.rs`): 12 converters
    with Windows' units, factors and rounding. *Done, except the Currency converter.*
@@ -135,8 +136,9 @@ UI code and is covered by unit tests.*
   - Changing an operator to a tighter one after its left side was computed adds brackets:
     `1 + 2 −` changed to `×` becomes `(1 + 2) ×`.
   - History records the whole expression, and repeated `=` repeats the last operation done.
-- **Differences:** no mode uses it yet; the Scientific mode (`FEAT-SCI-*`) will. `^` and `mod`
-  come with `FEAT-SCI-001` and `FEAT-SCI-008`.
+- **Differences:** the Programmer mode uses it (with its integer mode, `FEAT-PROG-*`); the
+  Scientific mode (`FEAT-SCI-*`) will too. `^` and the Scientific `mod` come with `FEAT-SCI-001`
+  and `FEAT-SCI-008`.
 
 #### `FEAT-CORE-004` Parentheses Evaluation Stack
 - **Status:** `[x] COMPLETED`
@@ -152,8 +154,8 @@ UI code and is covered by unit tests.*
     multiplies: `2(3)` and `(2)3` are `6`.
   - `)` without an open `(` is ignored; `()` is `(0)`.
   - Functions apply to a whole group: `(1 + 2) x²` shows `sqr(1 + 2)`.
-- **Differences:** like in Windows, Standard mode has no parentheses. The count will be shown
-  by the Scientific UI.
+- **Differences:** like in Windows, Standard mode has no parentheses. The Programmer mode's `(`
+  key shows the count.
 
 #### `FEAT-CORE-005` Percentage Calculation Logic
 - **Status:** `[x] COMPLETED`
@@ -417,81 +419,150 @@ UI code and is covered by unit tests.*
 ---
 
 ### Phase 4: Programmer Calculator Mode
-*Binary, hex, bitwise logic and word sizes.*
+*Binary, hex, bitwise logic and word sizes. Logic in `src/engine/integer.rs` (Windows' integer
+mode of `CCalcEngine`, run by `Calculator::programmer()` in `src/engine.rs`), UI in
+`src/app/programmer_view.rs`. The behaviors the tests pin down are listed in AGENTS.md.*
 
-> **Rust notes for the whole phase:** values are integers of a fixed word size, so use `i64`/`u64`
-> with masking rather than `BigRational`. Keep this logic in its own module without UI code.
+> **Rust notes for the whole phase:** the plan was `i64`/`u64` with masking, but Windows runs the
+> Programmer mode on the same engine as the Scientific mode, with rationals that its `DisplayNum`
+> truncates to the word size. CalcCraft does the same (`IntegerMode::truncate` at Windows'
+> `DisplayNum` points), because a quotient or a right shift inside parentheses keeps its fraction
+> for the next operation: `(255 AND 10 − 7 ÷ 2) =` is 6 in Windows and with rationals, 7 with
+> 64-bit integers. The integer mode's logic is still in its own module without UI code.
 
 #### `FEAT-PROG-001` Multi-Radix Number Bases (HEX, DEC, OCT, BIN)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P0`
 - **Depends On:** `FEAT-CORE-001`
 - **Windows ref:** `src/Calculator/Views/CalculatorProgrammerOperators.xaml`, `src/CalcManager/CEngine/scicomm.cpp`
+- **Rust:** `src/engine/integer.rs` (`Radix`, `IntegerMode::format`, `group`, `pad_binary`,
+  `digit_fits`), `src/engine.rs` (`Command::Radix`, `set_radix`, `radix_values`),
+  `src/app/programmer_view.rs` (`draw_radix_list`)
 - **Description:** The value shown in all four radixes at once, typed in the selected one.
 - **Acceptance Criteria:**
   - Digits that don't exist in the radix are disabled (A–F outside HEX, 8–9 in OCT, 2–9 in BIN).
-  - Entry lengths are limited by the word size, as in Windows.
+  - Entry lengths are limited by the word size, as in Windows (`CalcInput::TryAddDigit`).
+  - HEX and BIN show groups of 4, OCT groups of 3, DEC the region's grouping; BIN starts with a
+    whole group (`0010`) and wraps in the list. In the error state the list is empty.
+  - A new radix finishes a typed number and rewrites the expression line's operands, from their
+    unsigned values as in Windows (`-5 +` → `FFFFFFFFFFFFFFFB +`).
+  - Right-clicking a radix offers Copy, which copies its value without digit groups.
+- **Differences:** none known.
 
 #### `FEAT-PROG-002` Word Sizes (QWORD, DWORD, WORD, BYTE)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P0`
 - **Depends On:** `FEAT-PROG-001`
-- **Windows ref:** `src/CalcManager/CalculatorManager.cpp`
+- **Windows ref:** `src/CalcManager/CalculatorManager.cpp`, `CEngine/sciset.cpp` (`SetRadixTypeAndNumWidth`),
+  `src/Calculator/Views/CalculatorProgrammerDisplayPanel.xaml`
+- **Rust:** `src/engine/integer.rs` (`WordSize`, `IntegerMode::truncate`, `signed`),
+  `src/engine.rs` (`Command::WordSize`, `set_word_size`, `display_num`),
+  `src/app/programmer_view.rs` (`draw_programmer_controls`)
 - **Description:** 64, 32, 16 and 8 bit two's complement values.
 - **Acceptance Criteria:**
   - Switching to a smaller size truncates (`0x1FFFF` in WORD becomes `0xFFFF`).
-  - Correct sign extension and two's complement display in DEC.
+  - Correct sign extension and two's complement display in DEC (`FF` in a BYTE is `-1`, and
+    `FFFF` in a WORD).
+  - The word size button cycles QWORD → DWORD → WORD → BYTE and is disabled in the error state.
 
 #### `FEAT-PROG-003` Bitwise Logic Operations
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-PROG-002`
-- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`
-- **Description:** `AND`, `OR`, `NOT`, `XOR`, `NAND`, `NOR`, `XNOR`.
+- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`, `scifunc.cpp` (`IDC_COM`), `Ratpack/logic.cpp`
+- **Rust:** `src/engine/integer.rs` (`IntegerMode::apply`, `not`, `boolean`), `src/engine.rs`
+  (`Op::And` … `Op::Nor`, `Func::Not`), `src/app/programmer_view.rs` (the Bitwise menu)
+- **Description:** `AND`, `OR`, `NOT`, `XOR`, `NAND`, `NOR` (Windows has no `XNOR`).
 - **Acceptance Criteria:**
   - `0b1010 AND 0b1100 = 0b1000`.
   - `NOT` respects the word size (in BYTE, `NOT 0` is `0xFF`).
+  - Windows' precedence: `OR` and `XOR` below `AND`, `NAND` and `NOR`, below `+ −`, below
+    `× ÷ %` and the shifts. The Bitwise menu is a 3 × 2 flyout under its button.
 
 #### `FEAT-PROG-004` Bit Shifts (Logical & Arithmetic)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-PROG-002`
-- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`
+- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`, `src/Calculator/Views/CalculatorProgrammerRadixOperators.xaml(.cs)`
+- **Rust:** `src/engine/integer.rs` (`Op::LeftShift`, `RightShift`, `RightShiftLogical` in
+  `IntegerMode::apply`), `src/app/programmer_view.rs` (`ShiftMode`, the Bit shift menu)
 - **Description:** Left shift, logical right shift, arithmetic right shift (the shift type is chosen as in Windows).
 - **Acceptance Criteria:**
   - In BYTE: `0b10000000` arithmetic right shift 1 = `0b11000000`.
+  - A shift by the word size or more shows `Result not defined`.
+  - The Bit shift menu's choice (arithmetic, logical, rotate circular, rotate through carry)
+    decides what the two shift keys and `<` / `>` do.
 
 #### `FEAT-PROG-005` Bit Rotations (RoL, RoR, rotate through carry)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-PROG-002`
-- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`
-- **Description:** Circular rotation within the word size.
+- **Windows ref:** `src/CalcManager/CEngine/scifunc.cpp` (`IDC_ROL`, `IDC_ROLC`, …)
+- **Rust:** `src/engine/integer.rs` (`IntegerMode::rotate`, `carry`), `src/engine.rs`
+  (`Func::RotateLeft` … `RotateRightCarry`)
+- **Description:** Circular rotation within the word size, by one bit, as a function (`RoL(x)`).
 - **Acceptance Criteria:**
-  - In BYTE: `0b10000001 RoL 1 = 0b00000011`.
+  - In BYTE: `0b10000001 RoL = 0b00000011`.
+  - Through carry, the bit that falls out is kept for the next rotation; `C` clears the carry.
 
 #### `FEAT-PROG-006` Bit Toggling Keypad
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-PROG-001`, `FEAT-PROG-002`
 - **Windows ref:** `src/Calculator/Views/CalculatorProgrammerBitFlipPanel.xaml` (and `.xaml.cs`)
+- **Rust:** `src/engine/integer.rs` (`IntegerMode::toggle_bit`), `src/engine.rs`
+  (`Command::ToggleBit`, `bits`), `src/app/programmer_view.rs` (`draw_bit_panel`)
 - **Description:** 64 clickable bits in groups of four.
 - **Acceptance Criteria:**
   - Clicking a bit flips it and updates every radix at once.
   - Bits above the word size are disabled.
+  - Set bits are in the accent color; each group is labeled with its lowest bit's number, and
+    Narrator reads "5th bit, value 1".
 
 #### `FEAT-PROG-007` Hotkeys for Programmer Mode
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-PROG-001`
-- **Windows ref:** `docs/ManualTests.md`, `src/Calculator/Views/CalculatorProgrammerOperators.xaml`
+- **Windows ref:** `src/Calculator/Common/KeyboardShortcutManager.cs`, `Resources.resw`
+  (`*.KeyboardShortcutManager.*`), `src/Calculator/Views/CalculatorProgrammer*.xaml`
+- **Rust:** `src/app/programmer_view.rs` (`ProgrammerState::char_command`, `key_command`),
+  `src/app.rs` (`handle_keyboard`, `handle_key`)
 - **Description:**
   - `F5` (HEX), `F6` (DEC), `F7` (OCT), `F8` (BIN)
   - `F12` (QWORD), `F2` (DWORD), `F3` (WORD), `F4` (BYTE)
-  - `&` (AND), `|` (OR), `~` (NOT), `^` (XOR), `<` / `>` (shifts), `%` (mod)
+  - `&` (AND), `|` (OR), `~` (NOT), `^` (XOR), `.` (NAND), `\` (NOR), `<` / `>` (shifts),
+    `%` (mod), `A`–`F` (hex digits)
 - **Acceptance Criteria:**
-  - Check every key against the Windows source before implementing; the mode's own keys
-    override the Standard ones (`%` is mod here).
+  - Checked against the Windows source and the real calculator: the word size keys are the
+    shortcuts of the four (mostly hidden) word size buttons, each switching to the next size;
+    `.` and `\` are NAND and NOR, since the decimal point is disabled; `<` and `>` follow the
+    Bit shift menu. The mode's own keys override the Standard ones (`%` is mod here).
+
+#### `FEAT-PROG-008` Programmer Mode UI
+- **Status:** `[x] COMPLETED`
+- **Priority:** `P0`
+- **Depends On:** `FEAT-PROG-001`, `FEAT-PROG-002`
+- **Windows ref:** `src/Calculator/Views/Calculator.xaml` (`Programmer` state),
+  `CalculatorProgrammerRadixOperators.xaml`, `StandardCalculatorViewModel.cs`, `CalculatorManager.cpp`
+  (`SetProgrammerMode`), `Calculator.ViewModels/Common/CopyPasteManager.cs`
+- **Rust:** `src/app/programmer_view.rs`, `src/app.rs` (`Mode::Programmer`, `engine`, `set_mode`),
+  `src/engine.rs` (`programmer_paste_is_valid`, `reset`, `take_memory`)
+- **Description:** The Programmer mode in the menu (`Alt+4`): display, radix list, keypad
+  switches, word size, `MS` and `M˅`, the Bitwise and Bit shift menus and the 5 × 6 keypad
+  (`A`–`F`, shifts, `C`/`CE`, `⌫`, parentheses with their count, `%`, `÷ × − +`, `±`, `=`).
+- **Acceptance Criteria:**
+  - Sizes from `Calculator.xaml`'s star rows; the result font is 26, 46 or 72 px by window
+    height, and the keys grow in the `Medium` and `Large` states, as in Windows.
+  - Memory is shared with the Standard mode and shown in the current radix; the memory list
+    docks from 560 px (without a History tab); there is no history.
+  - Switching between Standard and Programmer resets the mode switched to, as in Windows.
+  - Paste checks the text with `CopyPasteManager`'s Programmer rules (`0x1F`, `1Fh`, `0b101`,
+    `255u`, `1_000`, the word size's limits) and types it in.
+  - Both themes, the keyboard focus and Narrator names as in Windows.
+- **Differences:** the keypad switch, Bitwise and Bit shift icons are drawn in code and the
+  shift keys' `«` and `»` are Segoe Fluent chevrons, since Windows takes them from the Calculator's
+  own icon font. Windows leaves `«` enabled in the error state; CalcCraft disables both shift keys.
+  The decimal key shows `.` in every region, as in the Standard mode.
 
 ---
 
@@ -785,13 +856,16 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 - **Description:** The ☰ menu lists the modes under a **Calculator** and a **Converter** heading,
   with Settings at the bottom. The list scrolls when the window is too short for it.
 - **Acceptance Criteria:**
-  - Switching modes keeps each mode's state; the selected mode has the accent pill.
+  - Switching modes keeps each mode's state, except that the Standard and Programmer modes start
+    over when switching between them, as in Windows; the selected mode has the accent pill.
   - Every new mode adds itself to `Mode` and to the menu.
 - **Differences:** Windows lists 18 modes: Standard, Scientific, Graphing, Programmer, Date
-  calculation, and 13 converters. CalcCraft lists only the implemented modes (Standard, Date
-  calculation and 12 converters, without Currency). Windows draws six converter icons (Volume,
-  Weight, Temperature, Speed, Data, Angle) from the Calculator's own icon font, whose license
-  limits it to Windows; CalcCraft uses similar Segoe Fluent Icons glyphs. The mode hotkeys are
+  calculation, and 13 converters. CalcCraft lists only the implemented modes (Standard,
+  Programmer, Date calculation and 12 converters, without Currency). Windows draws the Programmer
+  icon and six converter icons (Volume, Weight, Temperature, Speed, Data, Angle) from the
+  Calculator's own icon font, whose license limits it to Windows; CalcCraft uses similar Segoe
+  Fluent Icons glyphs (`</>` for Programmer). As in Windows, switching between the Standard and
+  Programmer modes starts the other one over, and they share the memory. The mode hotkeys are
   `FEAT-SHELL-010`.
 
 #### `FEAT-SHELL-002` Adaptive Layouts (docked panels)
@@ -807,7 +881,8 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
     tabs (14 px, 48 px high, a 16 × 3 px accent pipe under the selected one) over the same lists
     as the flyouts. The panel takes 240 of every 560 px, up to 320 px; the header's history
     button and `M˅` are hidden, `Ctrl+H` does nothing, and the panel opens on the list whose
-    flyout was opened last. An open flyout becomes the docked tab.
+    flyout was opened last. An open flyout becomes the docked tab. The Programmer mode docks its
+    memory list the same way, without the History tab.
   - The memory buttons are at most 80 px wide; a spacer before `M˅` takes the rest.
   - Converters switch between vertical and horizontal layouts.
   - Nothing clips or overlaps at the minimum window size, Windows' 320 × 500. Keep-on-top mode
@@ -969,7 +1044,8 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 - **Description:** `Alt+1` Standard, `Alt+2` Scientific, `Alt+3` Graphing, `Alt+4` Programmer,
   `Alt+5` Date calculation, and `Ctrl+E` Date calculation too. The converters have none.
 - **Acceptance Criteria:**
-  - Keys of modes that don't exist yet do nothing; `Alt+1`, `Alt+5` and `Ctrl+E` work today.
+  - Keys of modes that don't exist yet do nothing; `Alt+1`, `Alt+4`, `Alt+5` and `Ctrl+E` work
+    today.
   - As in Windows, they do nothing in keep-on-top mode, on the Settings page or with `AltGr`
     (`Ctrl+Alt`), and they work with a menu or flyout open. The digit isn't typed.
 - **Differences:** Windows switches when the key is released, CalcCraft when it's pressed.
@@ -1018,3 +1094,4 @@ Windows source in `../win-calculator`.
 | 2026-10-15 | Claude Code | `FEAT-SHELL-004` | Added the converters' "About equal to" results: `Converter::suggestions` ports `CalculateSuggested` with the everyday comparison units of `UnitConverterDataLoader.cs`, and `draw_suggestions` lays them out like `SupplementaryResults.xaml` and `HorizontalNoOverflowStackPanel` |
 | 2026-10-15 | Claude Code | `FEAT-SHELL-002`, `-005`, `-006`, `-007`, `-010`, `-011` | Finished Phase 8: the docked history and memory panel and Windows' 320 × 500 minimum size; `Alt+1`, `Alt+5` and `Ctrl+E`; keyboard focus with focus visuals and screen reader names for every control (`src/app/access.rs`); the Windows Calculator's translations in 60 languages (`tools/import-strings.ps1`, `locales/`) and the regional number and date formats (`src/locale.rs`, `src/app/region.rs`). Split right-to-left and complex scripts into `FEAT-SHELL-011`, blocked by egui's text layout |
 | 2026-10-15 | Claude Code | `FEAT-SHELL-007`, `FEAT-SHELL-008` | Added the Language and Regional format settings: drop-down cards in Appearance that switch the language and the formats at runtime and save them, with names in their own scripts, type-ahead, and CalcCraft's own translations of their labels (`locales/calccraft.txt`) |
+| 2026-10-16 | Claude Code | `FEAT-PROG-001`–`FEAT-PROG-008` | Finished Phase 4 (CalcCraft 0.5.0): Windows' integer mode of `CCalcEngine` in `src/engine/integer.rs` and `Calculator::programmer()` (radixes, word sizes, bitwise operators, shifts, rotations, bit toggling, `DisplayNum` truncation, Programmer paste rules), and the Programmer mode's UI in `src/app/programmer_view.rs` after `Calculator.xaml` and the `CalculatorProgrammer*.xaml` views; added `FEAT-PROG-008` for the mode's UI. Updated `FEAT-CORE-003`, `FEAT-CORE-004`, `FEAT-SHELL-001`, `-002` and `-010`; checked side by side with the Windows Calculator |

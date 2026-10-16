@@ -4,6 +4,7 @@ mod access;
 mod converter_view;
 mod date_view;
 mod palette;
+mod programmer_view;
 mod region;
 mod strings;
 
@@ -18,7 +19,7 @@ use eframe::egui::{
 };
 
 use crate::converter::Category;
-use crate::engine::{Calculator, Command, Func, Op, format_number};
+use crate::engine::{Calculator, Command, Func, Op, Radix, format_number};
 use palette::Palette;
 use strings::{tr, tr_format};
 
@@ -34,6 +35,9 @@ const ICON_HISTORY: char = '\u{E81C}';
 const ICON_CALENDAR: char = '\u{E787}';
 const ICON_COPY: char = '\u{E8C8}';
 const ICON_CALCULATOR: char = '\u{E8EF}';
+/// The Programmer mode in the menu, `</>`. Windows draws it from the Calculator's own
+/// icon font, which only Windows may use.
+const ICON_CODE: char = '\u{E943}';
 const ICON_MULTIPLY: char = '\u{E947}';
 const ICON_PLUS: char = '\u{E948}';
 const ICON_MINUS: char = '\u{E949}';
@@ -285,17 +289,19 @@ enum Panel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Standard,
+    Programmer,
     DateCalculation,
     Converter(Category),
 }
 
 impl Mode {
     /// The modes of the menu's "Calculator" group; the converters follow.
-    const CALCULATORS: [Mode; 2] = [Mode::Standard, Mode::DateCalculation];
+    const CALCULATORS: [Mode; 3] = [Mode::Standard, Mode::Programmer, Mode::DateCalculation];
 
     fn title(self) -> &'static str {
         match self {
             Mode::Standard => tr("StandardModeText"),
+            Mode::Programmer => tr("ProgrammerModeText"),
             Mode::DateCalculation => tr("DateCalculationModeText"),
             Mode::Converter(category) => category_name(category),
         }
@@ -303,13 +309,20 @@ impl Mode {
 
     /// The mode an `Alt` + digit shortcut opens. Windows' `NavCategory` gives the
     /// calculators `Alt+1` (Standard) to `Alt+5` (Date calculation) and the converters
-    /// none; Scientific, Graphing and Programmer don't exist here yet.
+    /// none; Scientific and Graphing don't exist here yet.
     fn for_alt_key(key: Key) -> Option<Mode> {
         match key {
             Key::Num1 => Some(Mode::Standard),
+            Key::Num4 => Some(Mode::Programmer),
             Key::Num5 => Some(Mode::DateCalculation),
             _ => None,
         }
+    }
+
+    /// The modes with a keypad engine. Windows' calculator view model switches its
+    /// engine between them, and they share the memory.
+    fn is_calculator(self) -> bool {
+        matches!(self, Mode::Standard | Mode::Programmer)
     }
 }
 
@@ -374,7 +387,12 @@ enum Kind {
 
 pub struct CalculatorApp {
     mode: Mode,
+    /// The Standard mode's engine; the Programmer mode has its own in `programmer`.
     calc: Calculator,
+    programmer: programmer_view::ProgrammerState,
+    /// The calculator mode with a keypad (Standard or Programmer) used last, which has
+    /// the memory.
+    last_calculator: Mode,
     date: date_view::DateState,
     converter: converter_view::ConverterState,
     flyout: Flyout,
@@ -462,6 +480,8 @@ impl CalculatorApp {
         Self {
             mode: Mode::Standard,
             calc: Calculator::default(),
+            programmer: programmer_view::ProgrammerState::new(),
+            last_calculator: Mode::Standard,
             date: date_view::DateState::new(),
             converter,
             flyout: Flyout::None,
@@ -499,7 +519,34 @@ impl CalculatorApp {
             || self.context_menu.is_some()
             || self.date.popup_open()
             || self.converter.popup_open()
+            || self.programmer.popup_open()
             || self.settings_popup.is_some()
+    }
+
+    /// The engine of the calculator mode on screen (or used last).
+    fn engine(&self) -> &Calculator {
+        if self.last_calculator == Mode::Programmer {
+            &self.programmer.calc
+        } else {
+            &self.calc
+        }
+    }
+
+    fn engine_mut(&mut self) -> &mut Calculator {
+        if self.last_calculator == Mode::Programmer {
+            &mut self.programmer.calc
+        } else {
+            &mut self.calc
+        }
+    }
+
+    /// A number from the engine for the screen: in the region's format, except in the
+    /// Programmer mode's other radixes, which have their own digit groups.
+    fn localize_number(&self, text: &str) -> String {
+        match self.engine().radix() {
+            Some(radix) if radix != Radix::Decimal => text.to_string(),
+            _ => numbers().localize(text),
+        }
     }
 
     /// Switches the interface language (`None`: the Windows setting).
@@ -555,12 +602,27 @@ impl CalculatorApp {
     }
 
     fn set_mode(&mut self, mode: Mode) {
+        if mode.is_calculator() && mode != self.last_calculator {
+            // Windows switches the engine: the memory goes along, and the engine starts
+            // over (`SetStandardMode`, `SetProgrammerMode`). Leaving the Programmer mode
+            // turns its bit toggling keypad off. Date calculation and the converters in
+            // between change nothing.
+            let memory = self.engine_mut().take_memory();
+            self.last_calculator = mode;
+            let engine = self.engine_mut();
+            engine.set_memory(memory);
+            engine.reset();
+            if mode == Mode::Standard {
+                self.programmer.bit_flip = false;
+            }
+        }
         self.mode = mode;
         self.page = Page::Calculator;
         self.flyout = Flyout::None;
         self.context_menu = None;
         self.date.close_popup();
         self.converter.close_popup();
+        self.programmer.close_popup();
         if let Mode::Converter(category) = mode {
             self.converter.converter.set_category(category);
         }
@@ -630,13 +692,22 @@ impl CalculatorApp {
         }
         // With the menu or a context menu open, Windows ignores the calculator's keys
         // (`HonorShortcuts(false)`); Esc closes them.
-        let covered = self.flyout == Flyout::Navigation || self.context_menu.is_some();
+        let covered = self.flyout == Flyout::Navigation
+            || self.context_menu.is_some()
+            || self.programmer.popup_open();
         let events = ctx.input(|i| i.events.clone());
         let now = ctx.input(|i| i.time);
         for event in events {
             match event {
                 Event::Text(text) if !covered => {
-                    for command in text.chars().filter_map(char_command) {
+                    let commands: Vec<Command> = if self.mode == Mode::Programmer {
+                        text.chars()
+                            .filter_map(|c| self.programmer.char_command(c))
+                            .collect()
+                    } else {
+                        text.chars().filter_map(char_command).collect()
+                    };
+                    for command in commands {
                         self.press(command, now);
                     }
                 }
@@ -649,12 +720,12 @@ impl CalculatorApp {
                     self.handle_key(ctx, key, modifiers, now);
                 }
                 Event::Copy if !covered => {
-                    if let Some(text) = self.calc.copy_text() {
+                    if let Some(text) = self.engine().copy_text() {
                         ctx.copy_text(numbers().localize_plain(&text));
                     }
                 }
                 Event::Paste(text) if !covered => {
-                    self.calc.paste(&numbers().delocalize(&text));
+                    self.engine_mut().paste(&numbers().delocalize(&text));
                 }
                 _ => {}
             }
@@ -666,6 +737,7 @@ impl CalculatorApp {
     }
 
     fn handle_key(&mut self, ctx: &Context, key: Key, modifiers: Modifiers, now: f64) {
+        let programmer = self.mode == Mode::Programmer;
         let command = if modifiers.command {
             match key {
                 Key::M => Command::MemoryStore,
@@ -673,12 +745,19 @@ impl CalculatorApp {
                 Key::Q => Command::MemorySubtract,
                 Key::R => Command::MemoryRecall,
                 Key::L => Command::MemoryClear,
+                // The Programmer mode has no history.
+                Key::H | Key::D if programmer => return,
                 // The docked panel already shows the history, so Windows ignores it then.
                 Key::H if self.docked => return,
                 Key::H => return self.toggle_flyout(Flyout::History),
                 Key::D if modifiers.shift => return self.calc.clear_history(),
                 _ => return,
             }
+        } else if let Some(command) = programmer
+            .then(|| programmer_view::ProgrammerState::key_command(key))
+            .flatten()
+        {
+            command
         } else {
             match key {
                 // Enter presses a focused button that isn't one of the calculator's keys.
@@ -691,6 +770,7 @@ impl CalculatorApp {
                     Command::Equals
                 }
                 Key::Escape if self.context_menu.is_some() => return self.context_menu = None,
+                Key::Escape if self.programmer.close_popup() => return,
                 Key::Escape if self.flyout != Flyout::None => return self.flyout = Flyout::None,
                 Key::Escape => {
                     // egui drops the focus on Esc; in Windows it's only `C`.
@@ -710,7 +790,7 @@ impl CalculatorApp {
     }
 
     fn press(&mut self, command: Command, now: f64) {
-        self.calc.execute(command);
+        self.engine_mut().execute(command);
         self.key_flash = Some((command, now));
     }
 
@@ -931,23 +1011,39 @@ impl CalculatorApp {
 
     /// The display's text: the number, or the error message in the interface's language.
     fn display_text(&self) -> String {
-        match self.calc.error() {
+        match self.engine().error() {
             Some(error) => tr(&format!("CEngine.{}", error.resource_id())).to_string(),
-            None => numbers().localize(&self.calc.display()),
+            None => self.localize_number(&self.engine().display()),
         }
     }
 
     fn draw_display(&self, ui: &Ui, rect: Rect) {
+        let base_size = (rect.height() * 0.46).clamp(28.0, 72.0);
+        let center_y = rect.top() + rect.height() * 0.6;
+        self.draw_display_sized(ui, rect, rect.top() + 6.0, base_size, center_y);
+    }
+
+    /// The expression line from `expression_top` and the number, at most `base_size` pt
+    /// and vertically centered on `center_y`, right-aligned in `rect`.
+    fn draw_display_sized(
+        &self,
+        ui: &Ui,
+        rect: Rect,
+        expression_top: f32,
+        base_size: f32,
+        center_y: f32,
+    ) {
         let p = self.palette;
         let painter = ui.painter();
         let right = rect.right() - 12.0;
         let max_width = rect.width() - 24.0;
+        let calc = self.engine();
 
-        let expression = numbers().localize_expression(&self.calc.expression());
+        let expression = numbers().localize_expression(&calc.expression());
         if !expression.is_empty() {
             let galley =
                 layout_elided_left(painter, &expression, FontId::proportional(14.0), max_width);
-            let pos = pos2(right - galley.size().x, rect.top() + 6.0);
+            let pos = pos2(right - galley.size().x, expression_top);
             let name = tr_format("Format_CalculatorExpression", &[&expression]);
             let line = Rect::from_min_size(pos, galley.size());
             access::text(ui, line, Id::new("expression"), &name, false);
@@ -955,10 +1051,15 @@ impl CalculatorApp {
         }
 
         // Screen readers read the display out whenever it changes ("Display is 7"),
-        // and say "point" for a decimal point that has no digits after it yet.
+        // and say "point" for a decimal point that has no digits after it yet. Hex,
+        // octal and binary numbers are read digit by digit.
         let display = self.display_text();
         let name = match display.strip_suffix(numbers().decimal.as_str()) {
-            Some(number) if !self.calc.has_error() => {
+            _ if calc.radix().is_some_and(|radix| radix != Radix::Decimal) && !calc.has_error() => {
+                let digits = programmer_view::spell_digits(&display);
+                tr_format("Format_CalculatorResults", &[&digits])
+            }
+            Some(number) if !calc.has_error() => {
                 tr_format("Format_CalculatorResults_Decimal", &[number])
             }
             _ => tr_format("Format_CalculatorResults", &[&display]),
@@ -966,14 +1067,12 @@ impl CalculatorApp {
         access::text(ui, rect, Id::new("display-value"), &name, true);
 
         // Long numbers shrink to fit the width.
-        let base_size = (rect.height() * 0.46).clamp(28.0, 72.0);
         let mut galley =
             painter.layout_no_wrap(display.clone(), FontId::new(base_size, semibold()), p.text);
         if galley.size().x > max_width {
             let size = (base_size * max_width / galley.size().x).max(10.0);
             galley = painter.layout_no_wrap(display, FontId::new(size, semibold()), p.text);
         }
-        let center_y = rect.top() + rect.height() * 0.6;
         let pos = pos2(right - galley.size().x, center_y - galley.size().y / 2.0);
         painter.galley(pos, galley, p.text);
     }
@@ -1023,13 +1122,7 @@ impl CalculatorApp {
         }
 
         let enabled = !self.calc.memory().is_empty() && !self.calc.has_error();
-        let mut label = text("M", 12.0, semibold());
-        if self.has_icons {
-            label.append(" ", 0.0, format(6.0, FontFamily::Proportional));
-            label.append(&ICON_CHEVRON_DOWN.to_string(), 0.0, format(8.0, icons()));
-        } else {
-            label.append("˅", 0.0, format(12.0, FontFamily::Proportional));
-        }
+        let label = self.memory_list_label();
         let name = if self.flyout == Flyout::Memory {
             tr("MemoryButton_Close")
         } else {
@@ -1162,13 +1255,18 @@ impl CalculatorApp {
         let painter = ui.painter().clone();
         let top = rect.top() - 3.0;
         let mut left = rect.left();
-        for (i, (panel, label)) in [
-            (Panel::History, tr("HistoryLabel.Text")),
-            (Panel::Memory, tr("MemoryLabel.Text")),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        // The Programmer mode has no history: the panel is the memory list alone.
+        let programmer = self.mode == Mode::Programmer;
+        let mut tabs = vec![(Panel::Memory, tr("MemoryLabel.Text"))];
+        if !programmer {
+            tabs.insert(0, (Panel::History, tr("HistoryLabel.Text")));
+        }
+        let shown = if programmer {
+            Panel::Memory
+        } else {
+            self.dock_tab
+        };
+        for (i, (panel, label)) in tabs.into_iter().enumerate() {
             let galley = painter.layout_no_wrap(
                 label.to_string(),
                 FontId::proportional(14.0),
@@ -1179,7 +1277,7 @@ impl CalculatorApp {
                 vec2(galley.size().x + 2.0 * HEADER_PADDING, HEADER_HEIGHT),
             );
             left = header.right();
-            let selected = self.dock_tab == panel;
+            let selected = shown == panel;
             let info = access::item(WidgetType::SelectableLabel, label, selected);
             let id = Id::new("dock-tab").with(i);
             let response = access::control(ui, p, header, id, true, RADIUS, info);
@@ -1204,14 +1302,14 @@ impl CalculatorApp {
                 );
                 painter.rect_filled(pipe_rect, 1.5, pipe);
             }
-            if response.clicked() && self.dock_tab != panel {
+            if response.clicked() && shown != panel {
                 self.dock_tab = panel;
                 self.context_menu = None;
             }
         }
         // `PivotItem` content has a 10 px top margin.
         let content = rect.with_min_y(top + HEADER_HEIGHT + 10.0);
-        self.draw_list(ui, content, self.dock_tab, vec2(12.0, 8.0));
+        self.draw_list(ui, content, shown, vec2(12.0, 8.0));
     }
 
     /// The history or memory list with its clear-all button, in a flyout or docked.
@@ -1223,12 +1321,13 @@ impl CalculatorApp {
         // A menu whose item is gone (or that belongs to the other panel) closes.
         self.context_menu = self.context_menu.filter(|menu| match menu.target {
             MenuTarget::History(i) => history && i < self.calc.history().len(),
-            MenuTarget::Memory(i) => !history && i < self.calc.memory().len(),
+            MenuTarget::Memory(i) => !history && i < self.engine().memory().len(),
+            MenuTarget::Radix(_) => true,
         });
         let empty = if history {
             self.calc.history().is_empty()
         } else {
-            self.calc.memory().is_empty()
+            self.engine().memory().is_empty()
         };
         if empty {
             let message = if history {
@@ -1267,7 +1366,7 @@ impl CalculatorApp {
                             }
                         }
                     } else {
-                        for i in 0..self.calc.memory().len() {
+                        for i in 0..self.engine().memory().len() {
                             let focus = self.take_popup_focus(i == 0);
                             if let Some(a) = self.memory_item(ui, i, focus) {
                                 action = Some(a);
@@ -1290,8 +1389,11 @@ impl CalculatorApp {
         if self.button(ui, trash, Id::new("trash"), Kind::Subtle, true, label, name) {
             action = Some(FlyoutAction::ClearAll);
         }
-        // Drawn last, so it covers the panel and catches the clicks outside it.
-        if let Some(menu) = self.context_menu {
+        // Drawn last, so it covers the panel and catches the clicks outside it. The radix
+        // list's menu is the Programmer mode's own.
+        if let Some(menu) = self.context_menu
+            && !matches!(menu.target, MenuTarget::Radix(_))
+        {
             action = self.draw_context_menu(ui, menu);
         }
 
@@ -1304,13 +1406,13 @@ impl CalculatorApp {
                 self.flyout = Flyout::None;
             }
             Some(FlyoutAction::RecallMemory(i)) => {
-                self.calc.memory_recall_item(i);
+                self.engine_mut().memory_recall_item(i);
                 self.flyout = Flyout::None;
             }
-            Some(FlyoutAction::MemoryAdd(i, subtract)) => self.calc.memory_add(i, subtract),
-            Some(FlyoutAction::MemoryClear(i)) => self.calc.memory_clear_item(i),
+            Some(FlyoutAction::MemoryAdd(i, subtract)) => self.engine_mut().memory_add(i, subtract),
+            Some(FlyoutAction::MemoryClear(i)) => self.engine_mut().memory_clear_item(i),
             Some(FlyoutAction::ClearAll) if history => self.calc.clear_history(),
-            Some(FlyoutAction::ClearAll) => self.calc.execute(Command::MemoryClear),
+            Some(FlyoutAction::ClearAll) => self.engine_mut().execute(Command::MemoryClear),
             Some(FlyoutAction::OpenMenu(target, pos)) => {
                 self.context_menu = Some(ContextMenu { target, pos });
             }
@@ -1320,7 +1422,7 @@ impl CalculatorApp {
                     .copy_text(numbers().localize(&format_number(&self.calc.history()[i].result)));
             }
             Some(FlyoutAction::DeleteHistory(i)) => self.calc.delete_history_item(i),
-            Some(FlyoutAction::CloseMenu) | None => {}
+            Some(FlyoutAction::CopyRadix(_) | FlyoutAction::CloseMenu) | None => {}
         }
     }
 
@@ -1385,9 +1487,11 @@ impl CalculatorApp {
     /// one of them has the keyboard focus. `focus` gives it the focus.
     fn memory_item(&self, ui: &mut Ui, index: usize, focus: bool) -> Option<FlyoutAction> {
         let p = self.palette;
-        let value = &self.calc.memory()[index];
+        let calc = self.engine();
+        let value = &calc.memory()[index];
         let width = ui.available_width();
-        let shown = numbers().localize(&format_number(value));
+        // In the Programmer mode, in the current radix.
+        let shown = self.localize_number(&calc.format_value(value));
         let result = layout_elided_left(
             ui.painter(),
             &shown,
@@ -1465,8 +1569,8 @@ impl CalculatorApp {
         action
     }
 
-    /// The right-click menu of a history or memory item, a WinUI `MenuFlyout`
-    /// at the pointer. A click outside it closes it.
+    /// The right-click menu of a history or memory item or of the Programmer mode's
+    /// radix list, a WinUI `MenuFlyout` at the pointer. A click outside it closes it.
     fn draw_context_menu(&self, ui: &Ui, menu: ContextMenu) -> Option<FlyoutAction> {
         const ITEM_HEIGHT: f32 = 32.0;
         const STRIDE: f32 = ITEM_HEIGHT + 2.0;
@@ -1508,6 +1612,11 @@ impl CalculatorApp {
                     FlyoutAction::MemoryAdd(i, true),
                 ),
             ],
+            MenuTarget::Radix(radix) => vec![(
+                self.icon(ICON_COPY, "⧉", 16.0),
+                tr("copyMenuItem"),
+                FlyoutAction::CopyRadix(radix),
+            )],
         };
         let painter = ui.painter();
         let font = FontId::proportional(14.0);
@@ -1657,6 +1766,7 @@ impl CalculatorApp {
                         let item = row.shrink2(vec2(4.0, 0.0));
                         let icon = match mode {
                             Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
+                            Mode::Programmer => self.icon(ICON_CODE, "</>", 16.0),
                             Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
                             Mode::Converter(category) => {
                                 self.icon(category_icon(category), "▫", 16.0)
@@ -2313,6 +2423,8 @@ enum FlyoutAction {
     OpenMenu(MenuTarget, Pos2),
     CopyHistory(usize),
     DeleteHistory(usize),
+    /// Copy a value of the Programmer mode's radix list.
+    CopyRadix(Radix),
     CloseMenu,
 }
 
@@ -2321,6 +2433,8 @@ enum FlyoutAction {
 enum MenuTarget {
     History(usize),
     Memory(usize),
+    /// A row of the Programmer mode's radix list.
+    Radix(Radix),
 }
 
 /// An open context menu and where the right click was.
@@ -2353,7 +2467,7 @@ impl eframe::App for CalculatorApp {
             self.title_bar_theme = Some(theme);
         }
         self.docked =
-            self.mode == Mode::Standard && !self.compact && ui.max_rect().width() >= DOCK_WIDTH;
+            self.mode.is_calculator() && !self.compact && ui.max_rect().width() >= DOCK_WIDTH;
 
         // The controls under an open popup leave the Tab order, and the control a popup
         // was opened from with the keyboard gets the focus back when it closes.
@@ -2387,7 +2501,7 @@ impl CalculatorApp {
             _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
             Mode::DateCalculation => self.handle_date_keyboard(&ctx),
             Mode::Converter(_) => self.handle_converter_keyboard(&ctx),
-            Mode::Standard => self.handle_keyboard(&ctx),
+            Mode::Standard | Mode::Programmer => self.handle_keyboard(&ctx),
         }
         let now = ctx.input(|i| i.time);
 
@@ -2398,7 +2512,7 @@ impl CalculatorApp {
             return;
         }
 
-        if self.mode != Mode::Standard {
+        if !self.mode.is_calculator() {
             let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
             self.draw_header(ui, header);
             if self.mode == Mode::DateCalculation {
@@ -2423,6 +2537,20 @@ impl CalculatorApp {
         };
         if dock.is_some() && matches!(self.flyout, Flyout::History | Flyout::Memory) {
             self.flyout = Flyout::None;
+        }
+
+        if self.mode == Mode::Programmer {
+            let header = Rect::from_min_size(main.min, vec2(main.width(), HEADER_HEIGHT));
+            self.draw_header(ui, header);
+            self.draw_programmer(ui, main.with_min_y(header.bottom()), now);
+            if let Some(dock) = dock {
+                self.draw_dock(ui, dock);
+            }
+            self.draw_programmer_popups(ui);
+            if self.flyout == Flyout::Navigation {
+                self.draw_navigation(ui, full);
+            }
+            return;
         }
 
         let header_height = if self.compact {
@@ -2616,6 +2744,20 @@ fn radio_button(
     let hovered = response.hovered();
 
     let center = pos2(left_center.x + 10.0, left_center.y);
+    paint_radio(p, painter, center, checked, hovered, pressed);
+    painter.galley(text_pos, galley, p.text);
+    response.clicked()
+}
+
+/// A WinUI radio button's 20 pt circle around `center`.
+fn paint_radio(
+    p: &Palette,
+    painter: &Painter,
+    center: Pos2,
+    checked: bool,
+    hovered: bool,
+    pressed: bool,
+) {
     if checked || pressed {
         let fill = if pressed {
             p.accent_pressed
@@ -2642,8 +2784,6 @@ fn radio_button(
         };
         painter.circle(center, 9.5, fill, Stroke::new(1.0, p.radio_ring));
     }
-    painter.galley(text_pos, galley, p.text);
-    response.clicked()
 }
 
 /// A text link with a subtle background on hover, like a WinUI hyperlink button.
@@ -2710,7 +2850,10 @@ fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
 /// The keypad's keys and the memory row are Windows' `CalculatorButton`s, which ignore
 /// `Enter` so that it always means `=`.
 fn is_calculator_key(id: Id) -> bool {
-    (0..24).any(|i| id == Id::new("key").with(i)) || (0..5).any(|i| id == Id::new("memory").with(i))
+    (0..24).any(|i| id == Id::new("key").with(i))
+        || (0..5).any(|i| id == Id::new("memory").with(i))
+        || (0..30).any(|i| id == programmer_view::key_id(i))
+        || id == programmer_view::memory_store_id()
 }
 
 /// The name a screen reader gives a key (Windows' `AutomationProperties.Name`).
@@ -2725,12 +2868,34 @@ fn command_name(command: Command) -> &'static str {
         Command::Digit(6) => "num6Button.AutomationName",
         Command::Digit(7) => "num7Button.AutomationName",
         Command::Digit(8) => "num8Button.AutomationName",
-        Command::Digit(_) => "num9Button.AutomationName",
+        Command::Digit(9) => "num9Button.AutomationName",
+        Command::Digit(10) => "aButton.AutomationName",
+        Command::Digit(11) => "bButton.AutomationName",
+        Command::Digit(12) => "cButton.AutomationName",
+        Command::Digit(13) => "dButton.AutomationName",
+        Command::Digit(14) => "eButton.AutomationName",
+        Command::Digit(_) => "fButton.AutomationName",
         Command::Decimal => "decimalSeparatorButton.AutomationName",
         Command::Operator(Op::Add) => "plusButton.AutomationName",
         Command::Operator(Op::Subtract) => "minusButton.AutomationName",
         Command::Operator(Op::Multiply) => "multiplyButton.AutomationName",
         Command::Operator(Op::Divide) => "divideButton.AutomationName",
+        Command::Operator(Op::Mod) => "modButton.AutomationName",
+        Command::Operator(Op::And) => "andButton.AutomationName",
+        Command::Operator(Op::Or) => "orButton.AutomationName",
+        Command::Operator(Op::Xor) => "xorButton.AutomationName",
+        Command::Operator(Op::Nand) => "nandButton.AutomationName",
+        Command::Operator(Op::Nor) => "norButton.AutomationName",
+        Command::Operator(Op::LeftShift) => "lshButton.AutomationName",
+        Command::Operator(Op::RightShift) => "rshButton.AutomationName",
+        Command::Operator(Op::RightShiftLogical) => "rshLogicalButton.AutomationName",
+        Command::Function(Func::Not) => "notButton.AutomationName",
+        Command::Function(Func::RotateLeft) => "rolButton.AutomationName",
+        Command::Function(Func::RotateRight) => "rorButton.AutomationName",
+        Command::Function(Func::RotateLeftCarry) => "rolCarryButton.AutomationName",
+        Command::Function(Func::RotateRightCarry) => "rorCarryButton.AutomationName",
+        Command::OpenParen => "openParenthesisButton.AutomationName",
+        Command::CloseParen => "closeParenthesisButton.AutomationName",
         Command::Equals => "equalButton.AutomationName",
         Command::Percent => "percentButton.AutomationName",
         Command::ClearEntry => "clearEntryButton.AutomationName",
@@ -2745,8 +2910,8 @@ fn command_name(command: Command) -> &'static str {
         Command::MemoryAdd => "MemPlus.AutomationName",
         Command::MemorySubtract => "MemMinus.AutomationName",
         Command::MemoryStore => "memButton.AutomationName",
-        // Parentheses belong to the Scientific mode, which has no keypad yet.
-        Command::OpenParen | Command::CloseParen => return "",
+        // The bits, the radix list and the word size button have names of their own.
+        Command::ToggleBit(_) | Command::Radix(_) | Command::WordSize(_) => return "",
     })
 }
 
@@ -2938,7 +3103,10 @@ mod tests {
         let mut events = vec![key(Key::E, Modifiers::COMMAND)];
         assert_eq!(take_mode_shortcut(&mut events), Some(Mode::DateCalculation));
 
-        // Scientific, Graphing and Programmer don't exist yet.
+        let mut events = vec![key(Key::Num4, Modifiers::ALT)];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Programmer));
+
+        // Scientific and Graphing don't exist yet.
         let mut events = vec![key(Key::Num2, Modifiers::ALT)];
         assert_eq!(take_mode_shortcut(&mut events), None);
         assert_eq!(events.len(), 1);

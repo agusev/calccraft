@@ -122,7 +122,7 @@ fn char_command(c: char) -> Option<ConverterCommand> {
 
 /// The heights of rows sized like XAML star rows: in proportion to their weights,
 /// but never below their minimum heights.
-fn star_rows(total: f32, rows: &[(f32, f32)]) -> Vec<f32> {
+pub(super) fn star_rows(total: f32, rows: &[(f32, f32)]) -> Vec<f32> {
     let mut heights = vec![0.0; rows.len()];
     let mut fixed = vec![false; rows.len()];
     loop {
