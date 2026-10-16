@@ -1,10 +1,11 @@
-//! The user's regional formats (Settings → Time & language → Language & region →
-//! Regional format): numbers, the list separator, dates, month and weekday names, and
-//! the first day of the week. As in the Windows Calculator they come from the user's
-//! locale, separately from the display language of the strings. The environment
-//! variable `CALCCRAFT_REGION` (for example `de-DE`) overrides it.
+//! Regional formats: numbers, the list separator, dates, month and weekday names, and the
+//! first day of the week. As in the Windows Calculator they come from the user's locale
+//! (Settings → Time & language → Language & region → Regional format), separately from the
+//! display language of the strings, unless the Settings page picks another region. The
+//! environment variable `CALCCRAFT_REGION` (for example `de-DE`) stands in for the
+//! Windows setting.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 
 use chrono::{NaiveDate, Weekday};
 
@@ -13,6 +14,8 @@ use crate::locale::NumberFormat;
 
 /// A region's formats.
 pub(super) struct Formats {
+    /// The region's locale name, like `de-CH`.
+    pub tag: String,
     pub numbers: NumberFormat,
     /// Joins the units of a date difference: Windows uses the list separator and a space.
     pub list_separator: String,
@@ -25,17 +28,39 @@ pub(super) struct Formats {
     dates: DateFormats,
 }
 
-static FORMATS: OnceLock<Formats> = OnceLock::new();
+/// The formats in use, and every region loaded so far (by choice: `None` is the Windows
+/// setting). They live as long as the app, since `formats` hands out `&'static`.
+static CURRENT: RwLock<Option<&'static Formats>> = RwLock::new(None);
+static LOADED: Mutex<Vec<(Option<String>, &'static Formats)>> = Mutex::new(Vec::new());
 
-/// The user's formats, read from Windows the first time they're needed.
+/// The formats in use: the Windows setting until `set_region` picks a region.
 pub(super) fn formats() -> &'static Formats {
-    FORMATS.get_or_init(|| {
-        #[cfg(windows)]
-        if let Some(formats) = windows::load() {
-            return formats;
-        }
-        Formats::english()
-    })
+    if let Some(formats) = *CURRENT.read().unwrap_or_else(PoisonError::into_inner) {
+        return formats;
+    }
+    set_region(None)
+}
+
+/// Switches to a region's formats: `choice` is a locale name from `regions()`, or `None`
+/// for the Windows setting. Returns the formats now in use.
+pub(super) fn set_region(choice: Option<&str>) -> &'static Formats {
+    let formats = load(choice);
+    *CURRENT.write().unwrap_or_else(PoisonError::into_inner) = Some(formats);
+    formats
+}
+
+fn load(choice: Option<&str>) -> &'static Formats {
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, formats)) = loaded.iter().find(|(key, _)| key.as_deref() == choice) {
+        return formats;
+    }
+    #[cfg(windows)]
+    let formats = windows::load(choice);
+    #[cfg(not(windows))]
+    let formats = None;
+    let formats: &'static Formats = Box::leak(Box::new(formats.unwrap_or_else(Formats::english)));
+    loaded.push((choice.map(str::to_string), formats));
+    formats
 }
 
 enum DateFormats {
@@ -50,6 +75,7 @@ impl Formats {
     fn english() -> Self {
         let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
         Self {
+            tag: "en-US".into(),
             numbers: NumberFormat::default(),
             list_separator: dates::ENGLISH.separator.to_string(),
             first_day: Weekday::Sun,
@@ -98,17 +124,81 @@ impl Formats {
                 .unwrap_or_else(|| date.format("%B %Y").to_string()),
         }
     }
+
+    /// A number and a date in these formats, for the Settings page:
+    /// `1,234,567.89 · October 15, 2026`.
+    pub fn example(&self, date: NaiveDate) -> String {
+        format!(
+            "{} · {}",
+            self.numbers.localize("1,234,567.89"),
+            self.date(date)
+        )
+    }
+}
+
+/// A regional format to choose from: its locale name and its name in its own language
+/// (`de-CH`, `Deutsch (Schweiz)`).
+pub(super) struct Region {
+    pub tag: String,
+    pub name: String,
+}
+
+/// The regional formats to choose from, sorted by name: Windows' regional formats whose
+/// names and dates egui can draw and that use the Gregorian calendar.
+pub(super) fn regions() -> &'static [Region] {
+    static REGIONS: OnceLock<Vec<Region>> = OnceLock::new();
+    REGIONS.get_or_init(|| {
+        #[cfg(windows)]
+        let tags = windows::regions();
+        #[cfg(not(windows))]
+        let tags: Vec<String> = Vec::new();
+        let mut regions: Vec<Region> = tags
+            .into_iter()
+            .map(|tag| Region {
+                name: native_name(&tag),
+                tag,
+            })
+            .collect();
+        // Variants of a region (`ca-ES` and `ca-ES-valencia`) can get the same name; those
+        // take Windows' display name, which tells them apart.
+        #[cfg(windows)]
+        {
+            let names: Vec<String> = regions.iter().map(|region| region.name.clone()).collect();
+            for region in &mut regions {
+                if names.iter().filter(|name| **name == region.name).count() > 1
+                    && let Some(name) = windows::display_name(&region.tag)
+                {
+                    region.name = name;
+                }
+            }
+        }
+        regions.sort_by_cached_key(|region| region.name.to_lowercase());
+        regions
+    })
+}
+
+/// A language's or region's name in its own language (`Deutsch (Deutschland)`), or the tag
+/// where Windows doesn't know it.
+pub(super) fn native_name(tag: &str) -> String {
+    #[cfg(windows)]
+    if let Some(name) = windows::native_name(tag) {
+        return name;
+    }
+    tag.to_string()
 }
 
 #[cfg(windows)]
 mod windows {
     use chrono::{Datelike, NaiveDate, Weekday};
-    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::Foundation::{LPARAM, SYSTEMTIME};
     pub(super) use windows_sys::Win32::Globalization::{DATE_LONGDATE, DATE_YEARMONTH};
     use windows_sys::Win32::Globalization::{
-        GetDateFormatEx, GetLocaleInfoEx, LOCALE_IFIRSTDAYOFWEEK, LOCALE_RETURN_NUMBER,
+        EnumSystemLocalesEx, GetDateFormatEx, GetLocaleInfoEx, GetUserDefaultLocaleName,
+        LOCALE_ICALENDARTYPE, LOCALE_IFIRSTDAYOFWEEK, LOCALE_RETURN_NUMBER,
         LOCALE_SABBREVMONTHNAME1, LOCALE_SDECIMAL, LOCALE_SGROUPING, LOCALE_SLIST,
-        LOCALE_SLONGDATE, LOCALE_SSHORTESTDAYNAME1, LOCALE_STHOUSAND,
+        LOCALE_SLONGDATE, LOCALE_SNATIVECOUNTRYNAME, LOCALE_SNATIVEDISPLAYNAME,
+        LOCALE_SNATIVELANGUAGENAME, LOCALE_SPECIFICDATA, LOCALE_SSCRIPTS, LOCALE_SSHORTESTDAYNAME1,
+        LOCALE_STHOUSAND,
     };
 
     use super::{DateFormats, Formats};
@@ -124,6 +214,13 @@ mod windows {
     }
 
     impl Locale {
+        fn named(name: &str) -> Self {
+            Self {
+                name: Some(wide(name)),
+                picker_pattern: Vec::new(),
+            }
+        }
+
         fn name(&self) -> *const u16 {
             self.name
                 .as_ref()
@@ -203,13 +300,28 @@ mod windows {
         text.encode_utf16().chain(Some(0)).collect()
     }
 
-    pub(super) fn load() -> Option<Formats> {
-        let name = std::env::var("CALCCRAFT_REGION")
-            .ok()
-            .map(|name| wide(&name));
-        let mut locale = Locale {
-            name,
-            picker_pattern: Vec::new(),
+    /// The user's locale name, like `de-CH`.
+    fn user_locale() -> Option<String> {
+        let mut buffer = [0u16; 85];
+        // SAFETY: the buffer and its length match (LOCALE_NAME_MAX_LENGTH is 85).
+        let length = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
+        (length > 1).then(|| String::from_utf16_lossy(&buffer[..length as usize - 1]))
+    }
+
+    /// The formats of a region (`None`: the Windows setting, or `CALCCRAFT_REGION`).
+    pub(super) fn load(choice: Option<&str>) -> Option<Formats> {
+        let (mut locale, tag) = match choice
+            .map(str::to_string)
+            .or_else(|| std::env::var("CALCCRAFT_REGION").ok())
+        {
+            Some(name) => (Locale::named(&name), name),
+            None => (
+                Locale {
+                    name: None,
+                    picker_pattern: Vec::new(),
+                },
+                user_locale().unwrap_or_else(|| "en-US".into()),
+            ),
         };
         let numbers = NumberFormat::new(
             &locale.info(LOCALE_SDECIMAL)?,
@@ -243,6 +355,7 @@ mod windows {
             .unwrap_or_else(|| "dddd, MMMM d, yyyy".into());
         locale.picker_pattern = wide(&without_weekday(&long_date));
         Some(Formats {
+            tag,
             numbers,
             list_separator: format!("{list} "),
             first_day,
@@ -252,56 +365,125 @@ mod windows {
         })
     }
 
+    /// The language and the country in their own language (`català (Espanya)`). Windows'
+    /// display name says less for some (`català (català)`, `euskara (euskara)`) and more for
+    /// others (`español (España, alfabetización internacional)`), but a language name that
+    /// has parentheses itself (`中文(简体)`) reads better as the display name (`中文(中国)`).
+    pub(super) fn native_name(tag: &str) -> Option<String> {
+        let locale = Locale::named(tag);
+        let language = locale.info(LOCALE_SNATIVELANGUAGENAME)?;
+        match locale.info(LOCALE_SNATIVECOUNTRYNAME) {
+            Some(country) if !language.contains(['(', '（']) => {
+                Some(format!("{language} ({country})"))
+            }
+            _ => display_name(tag),
+        }
+    }
+
+    /// Windows' own name of a locale in its language (`Deutsch (Schweiz)`).
+    pub(super) fn display_name(tag: &str) -> Option<String> {
+        Locale::named(tag).info(LOCALE_SNATIVEDISPLAYNAME)
+    }
+
+    /// Scripts egui can draw: Segoe UI's, and the ones `strings::script_font` adds.
+    const DRAWABLE_SCRIPTS: [&str; 15] = [
+        "Latn", "Cyrl", "Grek", "Armn", "Geor", "Hani", "Hans", "Hant", "Hira", "Kana", "Jpan",
+        "Hang", "Kore", "Thai", "Ethi",
+    ];
+
+    /// The Gregorian calendars of `LOCALE_ICALENDARTYPE` (CAL_GREGORIAN and its variants).
+    /// The date mode only knows the Gregorian calendar.
+    const GREGORIAN: [u32; 6] = [1, 2, 9, 10, 11, 12];
+
+    /// Windows' regional formats that `regions()` offers.
+    pub(super) fn regions() -> Vec<String> {
+        unsafe extern "system" fn collect(name: *const u16, _flags: u32, list: LPARAM) -> i32 {
+            // SAFETY: Windows passes a zero-terminated name, and `list` is the vector
+            // that `regions` passes in, alive for the whole enumeration.
+            unsafe {
+                let length = (0..).take_while(|&i| *name.add(i) != 0).count();
+                let names = &mut *(list as *mut Vec<String>);
+                names.push(String::from_utf16_lossy(std::slice::from_raw_parts(
+                    name, length,
+                )));
+            }
+            1
+        }
+        let mut names: Vec<String> = Vec::new();
+        // SAFETY: the callback only uses `names` while the call runs.
+        unsafe {
+            EnumSystemLocalesEx(
+                Some(collect),
+                LOCALE_SPECIFICDATA,
+                &mut names as *mut Vec<String> as LPARAM,
+                std::ptr::null(),
+            );
+        }
+        names.retain(|name| {
+            // Only regions (`de-CH`, not `de`), not the pseudo-locales, nor alternative sort
+            // orders (`de-DE_phoneb`).
+            if !name.contains('-') || name.starts_with("qps-") || name.contains('_') {
+                return false;
+            }
+            let locale = Locale::named(name);
+            let drawable = locale.info(LOCALE_SSCRIPTS).is_some_and(|scripts| {
+                scripts
+                    .split(';')
+                    .filter(|script| !script.is_empty())
+                    .all(|script| DRAWABLE_SCRIPTS.contains(&script))
+            });
+            let gregorian = locale
+                .number(LOCALE_ICALENDARTYPE)
+                .is_some_and(|calendar| GREGORIAN.contains(&calendar));
+            drawable && gregorian
+        });
+        names
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
 
-        /// Windows' own en-US and de-DE settings, without user changes.
-        fn load_region(name: &str) -> (Locale, NumberFormat) {
-            let locale = Locale {
-                name: Some(wide(name)),
-                picker_pattern: wide(&without_weekday(
-                    &Locale {
-                        name: Some(wide(name)),
-                        picker_pattern: Vec::new(),
-                    }
-                    .info(LOCALE_SLONGDATE)
-                    .unwrap(),
-                )),
-            };
-            let numbers = NumberFormat::new(
-                &locale.info(LOCALE_SDECIMAL).unwrap(),
-                &locale.info(LOCALE_STHOUSAND).unwrap(),
-                &locale.info(LOCALE_SGROUPING).unwrap(),
-            );
-            (locale, numbers)
-        }
-
         #[test]
         fn windows_formats() {
             let date = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
-            let (us, numbers) = load_region("en-US");
-            assert_eq!(numbers, NumberFormat::default());
-            assert_eq!(
-                us.format(date, 0, Some(&us.picker_pattern)).unwrap(),
-                "October 15, 2026"
-            );
-            assert_eq!(
-                us.format(date, DATE_LONGDATE, None).unwrap(),
-                "Thursday, October 15, 2026"
-            );
-            assert_eq!(
-                us.format(date, DATE_YEARMONTH, None).unwrap(),
-                "October 2026"
-            );
+            let us = load(Some("en-US")).unwrap();
+            assert_eq!(us.numbers, NumberFormat::default());
+            assert_eq!(us.date(date), "October 15, 2026");
+            assert_eq!(us.long_date(date), "Thursday, October 15, 2026");
+            assert_eq!(us.year_month(date), "October 2026");
+            assert_eq!(us.example(date), "1,234,567.89 · October 15, 2026");
 
-            let (de, numbers) = load_region("de-DE");
-            assert_eq!(numbers.localize("1,234,567.5"), "1.234.567,5");
-            assert_eq!(
-                de.format(date, 0, Some(&de.picker_pattern)).unwrap(),
-                "15. Oktober 2026"
-            );
-            assert_eq!(de.number(LOCALE_IFIRSTDAYOFWEEK), Some(0));
+            let de = load(Some("de-DE")).unwrap();
+            assert_eq!(de.tag, "de-DE");
+            assert_eq!(de.numbers.localize("1,234,567.5"), "1.234.567,5");
+            assert_eq!(de.date(date), "15. Oktober 2026");
+            assert_eq!(de.first_day, Weekday::Mon);
+            assert_eq!(de.list_separator, "; ");
+        }
+
+        #[test]
+        fn region_list() {
+            let regions = regions();
+            for tag in ["en-US", "de-CH", "fr-CA", "ja-JP", "ru-RU", "zh-TW"] {
+                assert!(regions.iter().any(|name| name.as_str() == tag), "{tag}");
+            }
+            // Right-to-left scripts, scripts that need shaping, other calendars.
+            for tag in [
+                "ar-SA",
+                "he-IL",
+                "hi-IN",
+                "th-TH",
+                "de-DE_phoneb",
+                "de",
+                "dua",
+            ] {
+                assert!(!regions.iter().any(|name| name.as_str() == tag), "{tag}");
+            }
+            assert_eq!(native_name("de-CH").as_deref(), Some("Deutsch (Schweiz)"));
+            assert_eq!(native_name("ca-ES").as_deref(), Some("català (Espanya)"));
+            assert_eq!(native_name("es-ES").as_deref(), Some("español (España)"));
+            assert_eq!(native_name("zh-CN").as_deref(), Some("中文(中国)"));
         }
     }
 }
@@ -323,7 +505,6 @@ pub(super) fn date_words() -> dates::Words<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::locale::without_weekday;
 
     #[test]
     fn english_formats_match_the_date_module() {
@@ -333,6 +514,6 @@ mod tests {
         assert_eq!(english.long_date(date), "Thursday, October 15, 2026");
         assert_eq!(english.year_month(date), "October 2026");
         assert_eq!(english.weekdays[0], "Su");
-        assert_eq!(without_weekday("dddd, MMMM d, yyyy"), "MMMM d, yyyy");
+        assert_eq!(english.example(date), "1,234,567.89 · October 15, 2026");
     }
 }

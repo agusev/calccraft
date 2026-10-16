@@ -7,7 +7,7 @@ mod palette;
 mod region;
 mod strings;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use eframe::egui::{
@@ -42,6 +42,8 @@ const ICON_EQUALS: char = '\u{E94E}';
 const ICON_BACKSPACE: char = '\u{E94F}';
 const ICON_KEEP_ON_TOP: char = '\u{EE49}';
 const ICON_BACK_TO_FULL: char = '\u{EE47}';
+const ICON_LANGUAGE: char = '\u{F2B7}';
+const ICON_REGION: char = '\u{E909}';
 
 /// The converters' icons in the navigation menu. Windows draws Volume, Weight,
 /// Temperature, Speed, Data and Angle from the Calculator's own icon font, which
@@ -114,6 +116,155 @@ const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
 const THEME_KEY: &str = "SelectedAppTheme";
 /// Storage key of the last converter and its units, the same as Windows uses.
 const CONVERTER_KEY: &str = "UnitConverterPreferences";
+/// Storage keys of the Language and Regional format choices, which Windows doesn't have:
+/// a language or locale name, or `Default` for the Windows setting (like the theme's).
+const LANGUAGE_KEY: &str = "CalcCraftLanguage";
+const REGION_KEY: &str = "CalcCraftRegionalFormat";
+const SYSTEM_CHOICE: &str = "Default";
+
+/// The Settings page's drop-down lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SettingsList {
+    Language,
+    Region,
+}
+
+impl SettingsList {
+    /// The id of the list's box, which gets the focus back when the list closes.
+    fn box_id(self) -> Id {
+        Id::new("settings-combo").with(self)
+    }
+
+    /// The choice it shows.
+    fn choice(self, app: &CalculatorApp) -> Option<&str> {
+        match self {
+            SettingsList::Language => app.language_choice.as_deref(),
+            SettingsList::Region => app.region_choice.as_deref(),
+        }
+    }
+}
+
+/// A Settings drop-down's entries: the Windows setting (`None`) first, then the languages or
+/// regional formats by their own names (`Deutsch (Deutschland)`), sorted.
+fn settings_entries(list: SettingsList) -> Vec<(Option<&'static str>, &'static str)> {
+    static LANGUAGES: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+    let mut entries = vec![(None, tr("SystemThemeRadioButton.Content"))];
+    match list {
+        SettingsList::Language => {
+            let languages = LANGUAGES.get_or_init(|| {
+                let mut languages: Vec<_> = strings::languages()
+                    .map(|tag| (tag, region::native_name(tag)))
+                    .collect();
+                languages.sort_by_cached_key(|(_, name)| name.to_lowercase());
+                languages
+            });
+            entries.extend(
+                languages
+                    .iter()
+                    .map(|(tag, name)| (Some(*tag), name.as_str())),
+            );
+        }
+        SettingsList::Region => entries.extend(
+            region::regions()
+                .iter()
+                .map(|region| (Some(region.tag.as_str()), region.name.as_str())),
+        ),
+    }
+    entries
+}
+
+/// A Settings card with a drop-down, like WinUI's `SettingsCard` with a `ComboBox`: icon,
+/// title and description on the left, the box on the right, or under the text in cards
+/// narrower than 476 px (`SettingsCardWrapThreshold`).
+struct ComboCard {
+    list: SettingsList,
+    title_text: &'static str,
+    value_text: String,
+    title: Arc<Galley>,
+    description: Arc<Galley>,
+    /// The value in the box, cut with "…" if it doesn't fit.
+    value: Arc<Galley>,
+    wide: bool,
+    box_width: f32,
+    height: f32,
+}
+
+impl ComboCard {
+    /// From a card's left edge to its text, as in the App theme card.
+    const TEXT_X: f32 = 58.0;
+    const ICON_X: f32 = 28.0;
+    const PADDING: f32 = 16.0;
+    const BOX_HEIGHT: f32 = 32.0;
+    /// The box's room for its chevron, right of the value.
+    const CHEVRON_ROOM: f32 = 40.0;
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        painter: &Painter,
+        p: &Palette,
+        width: f32,
+        list: SettingsList,
+        title: &'static str,
+        description: &str,
+        value: &str,
+    ) -> Self {
+        let wide = width >= 476.0;
+        let font = FontId::proportional(14.0);
+        let room = width - Self::TEXT_X - Self::PADDING;
+        let max_box = if wide { room / 2.0 } else { room };
+        let natural = painter
+            .layout_no_wrap(value.to_string(), font.clone(), p.text)
+            .size()
+            .x
+            + 12.0
+            + Self::CHEVRON_ROOM;
+        let box_width = natural.clamp(120.0_f32.min(max_box), max_box);
+        let text_width = if wide {
+            room - box_width - Self::PADDING
+        } else {
+            room
+        };
+        let title_galley = painter.layout(title.to_string(), font.clone(), p.text, text_width);
+        let description_galley = painter.layout(
+            description.to_string(),
+            FontId::proportional(12.0),
+            p.text_secondary,
+            text_width,
+        );
+        let mut job = LayoutJob::simple_singleline(value.to_string(), font, p.text);
+        job.wrap =
+            egui::text::TextWrapping::truncate_at_width(box_width - 12.0 - Self::CHEVRON_ROOM);
+        let value_galley = painter.layout_job(job);
+        let text_height = title_galley.size().y + description_galley.size().y;
+        let height = if wide {
+            (text_height + 2.0 * Self::PADDING).max(68.0)
+        } else {
+            Self::PADDING + text_height + 12.0 + Self::BOX_HEIGHT + Self::PADDING
+        };
+        Self {
+            list,
+            title_text: title,
+            value_text: value.to_string(),
+            title: title_galley,
+            description: description_galley,
+            value: value_galley,
+            wide,
+            box_width,
+            height,
+        }
+    }
+}
+
+/// An open Settings drop-down: which, and the box it opened from.
+#[derive(Clone, Copy)]
+struct SettingsPopup {
+    list: SettingsList,
+    anchor: Rect,
+    /// Scroll the list so the selected item sits over the box (the first frame).
+    scroll_pending: bool,
+    /// An item typed-ahead to, to scroll to and focus.
+    jump: Option<usize>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flyout {
@@ -260,6 +411,17 @@ pub struct CalculatorApp {
     last_focus: Option<Id>,
     /// The navigation menu has just opened.
     nav_opened: bool,
+    /// The Language and Regional format choices: a tag, or `None` for the Windows setting.
+    language_choice: Option<String>,
+    region_choice: Option<String>,
+    /// The script fonts loaded (see `strings::script_font`), and whether all of them are,
+    /// for the lists that show every language and region in its own script.
+    script_fonts: Vec<strings::ScriptFont>,
+    all_scripts: bool,
+    /// The open Settings drop-down, if any.
+    settings_popup: Option<SettingsPopup>,
+    /// What was typed into an open Settings drop-down to find an item, and when.
+    type_ahead: (String, f64),
 }
 
 impl CalculatorApp {
@@ -270,9 +432,19 @@ impl CalculatorApp {
             .and_then(|key| Theme::from_key(&key))
             .unwrap_or(Theme::System);
         cc.egui_ctx.set_theme(theme.preference());
-        // Before anything looks up a string: the language is picked once.
-        let language = strings::init(&strings::preferred_languages());
-        let has_icons = setup_fonts(&cc.egui_ctx, strings::script_font(language));
+        // A stored language or region, or `None` for the Windows setting.
+        let choice = |key: &str| {
+            cc.storage
+                .and_then(|storage| storage.get_string(key))
+                .filter(|value| value != SYSTEM_CHOICE)
+        };
+        let language_choice = choice(LANGUAGE_KEY);
+        let region_choice = choice(REGION_KEY);
+        // Before anything looks up a string or formats a number.
+        let language = strings::set_language(language_choice.as_deref());
+        let region = &region::set_region(region_choice.as_deref()).tag;
+        let script_fonts = needed_fonts(language, region, false);
+        let has_icons = setup_fonts(&cc.egui_ctx, &script_fonts);
         let icon = window_icon();
         let app_icon = cc.egui_ctx.load_texture(
             "app-icon",
@@ -311,6 +483,12 @@ impl CalculatorApp {
             focus_popup: false,
             last_focus: None,
             nav_opened: false,
+            language_choice,
+            region_choice,
+            script_fonts,
+            all_scripts: false,
+            settings_popup: None,
+            type_ahead: (String::new(), 0.0),
         }
     }
 
@@ -321,6 +499,35 @@ impl CalculatorApp {
             || self.context_menu.is_some()
             || self.date.popup_open()
             || self.converter.popup_open()
+            || self.settings_popup.is_some()
+    }
+
+    /// Switches the interface language (`None`: the Windows setting).
+    fn set_language(&mut self, ctx: &Context, choice: Option<String>) {
+        strings::set_language(choice.as_deref());
+        self.language_choice = choice;
+        self.update_fonts(ctx);
+    }
+
+    /// Switches the regional format (`None`: the Windows setting).
+    fn set_region(&mut self, ctx: &Context, choice: Option<String>) {
+        region::set_region(choice.as_deref());
+        self.region_choice = choice;
+        self.update_fonts(ctx);
+    }
+
+    /// Loads the script fonts the language and the region need (all of them once a list
+    /// that shows every language or region has opened), if they aren't loaded yet.
+    fn update_fonts(&mut self, ctx: &Context) {
+        let fonts = needed_fonts(
+            strings::language(),
+            &region::formats().tag,
+            self.all_scripts,
+        );
+        if fonts != self.script_fonts {
+            setup_fonts(ctx, &fonts);
+            self.script_fonts = fonts;
+        }
     }
 
     /// Notes that a popup or flyout opened from the control `id`. If the keyboard
@@ -379,9 +586,45 @@ impl CalculatorApp {
 
     fn handle_keyboard(&mut self, ctx: &Context) {
         if self.page == Page::Settings {
-            // The calculator is hidden, so its keys and shortcuts do nothing here.
-            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            // The calculator is hidden, so its keys and shortcuts do nothing here. Esc
+            // closes an open drop-down first, and typing in one jumps to an item that
+            // starts with what was typed, as in a WinUI ComboBox.
+            if ctx.input(|i| i.key_pressed(Key::Escape)) && self.settings_popup.take().is_none() {
                 self.page = Page::Calculator;
+            }
+            if let Some(popup) = &mut self.settings_popup {
+                let now = ctx.input(|i| i.time);
+                let typed: String = ctx.input(|i| {
+                    i.events
+                        .iter()
+                        .filter_map(|event| match event {
+                            Event::Text(text) => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect()
+                });
+                let (prefix, at) = &mut self.type_ahead;
+                if now - *at > 1.0 {
+                    prefix.clear();
+                }
+                // A space continues a search ("deutsch (s…"); otherwise it presses the
+                // focused item, so it doesn't start one.
+                let typed = if prefix.is_empty() {
+                    typed.trim_start()
+                } else {
+                    typed.as_str()
+                };
+                if !typed.is_empty() {
+                    if typed.contains(' ') {
+                        ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space));
+                    }
+                    prefix.push_str(&typed.to_lowercase());
+                    *at = now;
+                    let entries = settings_entries(popup.list);
+                    popup.jump = entries
+                        .iter()
+                        .position(|(_, name)| name.to_lowercase().starts_with(prefix.as_str()));
+                }
             }
             return;
         }
@@ -1545,20 +1788,51 @@ impl CalculatorApp {
         );
 
         let mut action = None;
+        // An open drop-down holds the page still: it stays over its box.
+        let scrolling = if self.settings_popup.is_some() {
+            egui::scroll_area::ScrollSource::NONE
+        } else {
+            egui::scroll_area::ScrollSource::default()
+        };
         ui.scope_builder(
             UiBuilder::new().max_rect(rect.with_min_y(header.bottom())),
             |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("settings")
                     .auto_shrink(false)
+                    .scroll_source(scrolling)
                     .show(ui, |ui| action = self.settings_content(ui));
             },
         );
+        let ctx = ui.ctx().clone();
         match action {
             Some(SettingsAction::ToggleTheme) => self.theme_expanded = !self.theme_expanded,
-            Some(SettingsAction::SetTheme(theme)) => self.set_theme(ui.ctx(), theme),
-            Some(SettingsAction::OpenUrl(url)) => ui.ctx().open_url(egui::OpenUrl::new_tab(url)),
+            Some(SettingsAction::SetTheme(theme)) => self.set_theme(&ctx, theme),
+            Some(SettingsAction::OpenUrl(url)) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            Some(SettingsAction::OpenList(list, anchor)) => {
+                self.settings_popup = Some(SettingsPopup {
+                    list,
+                    anchor,
+                    scroll_pending: true,
+                    jump: None,
+                });
+                self.type_ahead.0.clear();
+                self.opened_from(&ctx, list.box_id());
+                // The entries are in their own scripts.
+                self.all_scripts = true;
+                self.update_fonts(&ctx);
+            }
             None => {}
+        }
+
+        if let Some(popup) = self.settings_popup
+            && let Some(choice) = self.draw_settings_list(ui, rect, popup)
+        {
+            let choice = choice.map(str::to_string);
+            match popup.list {
+                SettingsList::Language => self.set_language(&ctx, choice),
+                SettingsList::Region => self.set_region(&ctx, choice),
+            }
         }
     }
 
@@ -1603,6 +1877,40 @@ impl CalculatorApp {
         } else {
             0.0
         };
+        // The Language and Regional format cards: the region's describes it by example.
+        let today = chrono::Local::now().date_naive();
+        // A stored choice that isn't in the list shows by its own name.
+        let chosen = |list: SettingsList| {
+            let choice = list.choice(self);
+            settings_entries(list)
+                .into_iter()
+                .find(|(tag, _)| *tag == choice)
+                .map_or_else(
+                    || choice.map(region::native_name),
+                    |(_, name)| Some(name.to_string()),
+                )
+                .unwrap_or_default()
+        };
+        let combo_cards = [
+            ComboCard::new(
+                &painter,
+                p,
+                width - 2.0 * SIDE,
+                SettingsList::Language,
+                tr("CalcCraft.Language"),
+                tr("CalcCraft.LanguageDescription"),
+                &chosen(SettingsList::Language),
+            ),
+            ComboCard::new(
+                &painter,
+                p,
+                width - 2.0 * SIDE,
+                SettingsList::Region,
+                tr("CalcCraft.RegionalFormat"),
+                &region::formats().example(today),
+                &chosen(SettingsList::Region),
+            ),
+        ];
         let link_text = "GitHub";
         let prefix = "To learn how you can contribute to CalcCraft, check out the project on ";
         let paragraph = |link_color: Color32| {
@@ -1620,7 +1928,11 @@ impl CalculatorApp {
         let appearance_y = 23.0;
         let theme_top = appearance_y + 18.0;
         let theme_bottom = theme_top + header_height + options_height;
-        let about_y = theme_bottom + 45.0;
+        // Cards in a group are 4 px apart.
+        let language_top = theme_bottom + 4.0;
+        let region_top = language_top + combo_cards[0].height + 4.0;
+        let cards_bottom = region_top + combo_cards[1].height;
+        let about_y = cards_bottom + 45.0;
         let about_top = about_y + 18.0;
         let feedback_y = about_top + CARD_HEIGHT + 25.0;
         let contribute_top = feedback_y + 40.0 - row_height / 2.0;
@@ -1725,6 +2037,20 @@ impl CalculatorApp {
             }
         }
 
+        // Language and Regional format (CalcCraft's own; Windows follows its settings).
+        for (card, card_top) in combo_cards.iter().zip([language_top, region_top]) {
+            let rect =
+                Rect::from_min_size(pos2(left, top + card_top), vec2(right - left, card.height));
+            let (glyph, fallback) = match card.list {
+                SettingsList::Language => (ICON_LANGUAGE, "A"),
+                SettingsList::Region => (ICON_REGION, "◍"),
+            };
+            let icon = self.icon(glyph, fallback, 20.0);
+            if let Some(anchor) = self.draw_combo_card(ui, &painter, rect, card, icon) {
+                action = Some(SettingsAction::OpenList(card.list, anchor));
+            }
+        }
+
         // About: the app's name, icon and version
         section_label(
             p,
@@ -1794,6 +2120,178 @@ impl CalculatorApp {
         }
         action
     }
+
+    /// Draws a `ComboCard` in `rect`. Returns its box when the box was clicked.
+    fn draw_combo_card(
+        &self,
+        ui: &Ui,
+        painter: &Painter,
+        rect: Rect,
+        card: &ComboCard,
+        icon: LayoutJob,
+    ) -> Option<Rect> {
+        let p = self.palette;
+        painter.rect_filled(rect, RADIUS, p.card);
+        painter.rect_stroke(
+            rect,
+            RADIUS,
+            Stroke::new(1.0, p.card_border),
+            StrokeKind::Inside,
+        );
+        let title_height = card.title.size().y;
+        let text_height = title_height + card.description.size().y;
+        let text_top = if card.wide {
+            rect.center().y - text_height / 2.0
+        } else {
+            rect.top() + ComboCard::PADDING
+        };
+        let icon = painter.layout_job(icon);
+        let icon_center = pos2(
+            rect.left() + ComboCard::ICON_X,
+            text_top + text_height / 2.0,
+        );
+        painter.galley(icon_center - icon.size() / 2.0, icon, p.text);
+        let text_left = rect.left() + ComboCard::TEXT_X;
+        painter.galley(pos2(text_left, text_top), card.title.clone(), p.text);
+        painter.galley(
+            pos2(text_left, text_top + title_height),
+            card.description.clone(),
+            p.text_secondary,
+        );
+
+        let size = vec2(card.box_width, ComboCard::BOX_HEIGHT);
+        let min = if card.wide {
+            pos2(
+                rect.right() - ComboCard::PADDING - size.x,
+                rect.center().y - size.y / 2.0,
+            )
+        } else {
+            pos2(text_left, text_top + text_height + 12.0)
+        };
+        let field = Rect::from_min_size(min, size);
+        let info = access::combo_box(card.title_text, &card.value_text);
+        let response = access::control(ui, p, field, card.list.box_id(), true, RADIUS, info);
+        let fill = if response.is_pointer_button_down_on() {
+            p.control_pressed
+        } else if response.hovered() {
+            p.control_hover
+        } else {
+            p.control
+        };
+        painter.rect_filled(field, RADIUS, fill);
+        painter.rect_stroke(
+            field,
+            RADIUS,
+            Stroke::new(1.0, p.control_border),
+            StrokeKind::Inside,
+        );
+        let value_pos = pos2(
+            field.left() + 12.0,
+            field.center().y - card.value.size().y / 2.0,
+        );
+        painter.galley(value_pos, card.value.clone(), p.text);
+        let chevron = painter.layout_job(self.icon(ICON_CHEVRON_DOWN, "˅", 12.0));
+        let chevron_center = pos2(field.right() - 18.0, field.center().y);
+        painter.galley(
+            chevron_center - chevron.size() / 2.0,
+            chevron,
+            p.text_secondary,
+        );
+        response.clicked().then_some(field)
+    }
+
+    /// The open Settings drop-down: the entries, with the selected one over the box where it
+    /// fits, as in WinUI. Returns the entry chosen: `Some(None)` is the Windows setting.
+    fn draw_settings_list(
+        &mut self,
+        ui: &mut Ui,
+        full: Rect,
+        popup: SettingsPopup,
+    ) -> Option<Option<&'static str>> {
+        const ITEM_HEIGHT: f32 = 36.0;
+        /// WinUI's `MaxDropDownHeight` (504 px) in items.
+        const VISIBLE_ITEMS: usize = 14;
+        let p = self.palette;
+        let entries = settings_entries(popup.list);
+        let choice = popup.list.choice(self);
+        let selected = entries
+            .iter()
+            .position(|(tag, _)| *tag == choice)
+            .unwrap_or(0);
+        let backdrop = ui.interact(full, Id::new("settings-backdrop"), Sense::CLICK);
+        access::set_covered(ui.ctx(), false);
+
+        let fits = ((full.height() - 16.0) / ITEM_HEIGHT).floor() as usize;
+        let visible = entries.len().min(VISIBLE_ITEMS).min(fits).max(1);
+        let height = visible as f32 * ITEM_HEIGHT + 8.0;
+        let widest = entries
+            .iter()
+            .map(|(_, name)| {
+                ui.painter()
+                    .layout_no_wrap(name.to_string(), FontId::proportional(14.0), p.text)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
+        let width = (widest + 48.0)
+            .max(popup.anchor.width())
+            .min(full.width() - 8.0);
+        // As in the converters' unit lists: a list that scrolls is centered on the box and
+        // scrolled to the selected entry, a short one is moved there.
+        let lowest_top = (full.bottom() - 4.0 - height).max(full.top() + 4.0);
+        let fit = |top: f32| top.clamp(full.top() + 4.0, lowest_top);
+        let target = popup.anchor.center().y - ITEM_HEIGHT / 2.0 - 4.0;
+        let max_offset = (entries.len() - visible) as f32 * ITEM_HEIGHT;
+        let centered = fit(target - (visible / 2) as f32 * ITEM_HEIGHT);
+        let row = selected as f32 * ITEM_HEIGHT;
+        let offset = (row - (target - centered)).clamp(0.0, max_offset);
+        let top = fit(target - (row - offset));
+        let left = popup
+            .anchor
+            .left()
+            .min(full.right() - 4.0 - width)
+            .max(full.left() + 4.0);
+        let rect = Rect::from_min_size(pos2(left, top), vec2(width, height));
+        date_view::popup_frame(p, ui.painter(), rect, p.popup);
+        ui.interact(rect, Id::new("settings-list"), Sense::CLICK);
+
+        let mut chosen = None;
+        ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(4.0)), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt(("settings-list", popup.list))
+                .auto_shrink(false);
+            if popup.scroll_pending {
+                area = area.vertical_scroll_offset(offset);
+            } else if let Some(jump) = popup.jump {
+                // Typed ahead: the entry found goes to the top of the list.
+                area = area.vertical_scroll_offset(jump as f32 * ITEM_HEIGHT);
+            }
+            area.show_rows(ui, ITEM_HEIGHT, entries.len(), |ui, range| {
+                for index in range {
+                    let size = vec2(ui.available_width(), ITEM_HEIGHT);
+                    let (row, _) = ui.allocate_exact_size(size, Sense::hover());
+                    let item = row.shrink2(vec2(0.0, 2.0));
+                    let id = Id::new("settings-item").with(popup.list).with(index);
+                    let (tag, name) = entries[index];
+                    let focus =
+                        self.take_popup_focus(index == selected) || popup.jump == Some(index);
+                    if date_view::list_item(p, ui, id, item, name, index == selected, focus) {
+                        chosen = Some(tag);
+                    }
+                }
+            });
+        });
+
+        if let Some(open) = &mut self.settings_popup {
+            open.scroll_pending = false;
+            open.jump = None;
+        }
+        if chosen.is_some() || backdrop.clicked() {
+            self.settings_popup = None;
+        }
+        chosen
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1801,6 +2299,8 @@ enum SettingsAction {
     ToggleTheme,
     SetTheme(Theme),
     OpenUrl(&'static str),
+    /// Open a drop-down list from its box.
+    OpenList(SettingsList, Rect),
 }
 
 #[derive(Clone, Copy)]
@@ -1834,6 +2334,13 @@ impl eframe::App for CalculatorApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(THEME_KEY, self.theme.key().to_owned());
         storage.set_string(CONVERTER_KEY, self.converter.converter.preferences());
+        for (key, choice) in [
+            (LANGUAGE_KEY, &self.language_choice),
+            (REGION_KEY, &self.region_choice),
+        ] {
+            let value = choice.as_deref().unwrap_or(SYSTEM_CHOICE);
+            storage.set_string(key, value.to_owned());
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
@@ -1861,6 +2368,13 @@ impl eframe::App for CalculatorApp {
 
         self.draw_frame(ui, &ctx);
         self.last_focus = access::focused(&ctx);
+        // The Settings lists load every script font (some 70 MB of CJK fonts); they go
+        // again with the page.
+        if self.page != Page::Settings && self.all_scripts {
+            self.settings_popup = None;
+            self.all_scripts = false;
+            self.update_fonts(&ctx);
+        }
     }
 }
 
@@ -2254,10 +2768,31 @@ fn char_command(c: char) -> Option<Command> {
     })
 }
 
-/// Loads Windows fonts: Segoe UI, Segoe UI Semibold and the icon font, and the font for
-/// the script of the interface's language where Segoe UI doesn't have it (a file in the
-/// Fonts folder and its index in a collection). Returns `true` if the icon font was found.
-fn setup_fonts(ctx: &Context, script_font: Option<(&str, u32)>) -> bool {
+/// The script fonts that the interface language and the regional format need, the
+/// language's first (its glyphs win for characters that both have, like Chinese and
+/// Japanese ideographs), or all of them.
+fn needed_fonts(language: &str, region: &str, all: bool) -> Vec<strings::ScriptFont> {
+    let mut fonts: Vec<strings::ScriptFont> =
+        [strings::script_font(language), strings::script_font(region)]
+            .into_iter()
+            .flatten()
+            .collect();
+    if all {
+        fonts.extend(strings::LIST_FONTS);
+    }
+    let mut seen = Vec::new();
+    fonts.retain(|font| {
+        let new = !seen.contains(font);
+        seen.push(*font);
+        new
+    });
+    fonts
+}
+
+/// Loads Windows fonts: Segoe UI, Segoe UI Semibold and the icon font, and the fonts for
+/// scripts that Segoe UI doesn't have (files in the Fonts folder and their index in a
+/// collection). Returns `true` if the icon font was found.
+fn setup_fonts(ctx: &Context, script_fonts: &[strings::ScriptFont]) -> bool {
     let dir =
         std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))
             .join("Fonts");
@@ -2278,22 +2813,25 @@ fn setup_fonts(ctx: &Context, script_font: Option<(&str, u32)>) -> bool {
         .or_else(|| load("segmdl2.ttf"))
         .map(|d| add("icons", d));
     let has_icons = icon_font.is_some();
-    let script = script_font.and_then(|(file, index)| {
-        let data = load(file)?;
-        let mut font = egui::FontData::from_owned(data);
-        font.index = index;
-        fonts.font_data.insert("script".to_owned(), Arc::new(font));
-        Some("script".to_owned())
-    });
+    let scripts: Vec<String> = script_fonts
+        .iter()
+        .filter_map(|&(file, index)| {
+            let mut font = egui::FontData::from_owned(load(file)?);
+            font.index = index;
+            let name = format!("script-{file}");
+            fonts.font_data.insert(name.clone(), Arc::new(font));
+            Some(name)
+        })
+        .collect();
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     if let Some(name) = regular {
         proportional.insert(0, name);
     }
-    // Right after Segoe UI, so the script's characters come from it and not from egui's
+    // Right after Segoe UI, so the scripts' characters come from them and not from egui's
     // own fallback fonts.
-    if let Some(name) = script {
-        proportional.insert(1.min(proportional.len()), name);
+    for (i, name) in scripts.into_iter().enumerate() {
+        proportional.insert((1 + i).min(proportional.len()), name);
     }
     let fallback = proportional.clone();
     let family =

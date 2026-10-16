@@ -4,7 +4,7 @@
 //! Like Windows, the language follows the Windows display language.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError, RwLock};
 
 /// Every language the Windows Calculator is translated into, with its strings.
 const LOCALES: &[(&str, &str)] = &[
@@ -79,6 +79,10 @@ const UNSUPPORTED: &[&str] = &[
     "ar-SA", "fa-IR", "he-IL", "hi-IN", "kn-IN", "km-KH", "lo-LA", "ml-IN", "ta-IN", "te-IN",
 ];
 
+/// CalcCraft's own strings, which the Windows Calculator doesn't have (the Language and
+/// Regional format settings), in `[language]` sections. Translated for CalcCraft.
+const OWN: &str = include_str!("../../locales/calccraft.txt");
+
 const ENGLISH: &str = "en-US";
 
 /// The strings of one language, with English for anything missing.
@@ -88,14 +92,21 @@ struct Strings {
     english: HashMap<&'static str, String>,
 }
 
-static STRINGS: OnceLock<Strings> = OnceLock::new();
+/// The language in use. Every language loaded stays in `LOADED` for as long as the app
+/// runs, since `tr` hands out `&'static str`; switching back doesn't load it again.
+static CURRENT: RwLock<Option<&'static Strings>> = RwLock::new(None);
+static LOADED: Mutex<Vec<&'static Strings>> = Mutex::new(Vec::new());
 
 impl Strings {
     fn new(language: &'static str) -> Self {
+        let mut table = parse(locale(language).unwrap_or_default());
+        table.extend(parse(own(language)));
+        let mut english = parse(locale(ENGLISH).unwrap_or_default());
+        english.extend(parse(own(ENGLISH)));
         Self {
             language,
-            table: parse(locale(language).unwrap_or_default()),
-            english: parse(locale(ENGLISH).unwrap_or_default()),
+            table,
+            english,
         }
     }
 
@@ -115,6 +126,27 @@ fn locale(language: &str) -> Option<&'static str> {
         .iter()
         .find(|(tag, _)| *tag == language)
         .map(|(_, text)| *text)
+}
+
+/// The `[language]` section of CalcCraft's own strings (empty if there is none).
+fn own(language: &str) -> &'static str {
+    let header = format!("[{language}]");
+    let Some(start) = OWN.lines().position(|line| line.trim() == header) else {
+        return "";
+    };
+    // Byte offsets of the section: from the line after the header to the next header.
+    let mut offset = 0;
+    let mut begin = None;
+    for (i, line) in OWN.split_inclusive('\n').enumerate() {
+        if i == start + 1 {
+            begin = Some(offset);
+        }
+        if i > start && line.starts_with('[') {
+            return &OWN[begin.unwrap_or(offset)..offset];
+        }
+        offset += line.len();
+    }
+    begin.map_or("", |begin| &OWN[begin..])
 }
 
 /// Reads `key=value` lines; values write line breaks as `\n` and backslashes as `\\`.
@@ -137,19 +169,57 @@ fn parse(text: &'static str) -> HashMap<&'static str, String> {
         .collect()
 }
 
-/// Picks the language of the interface: the first of the user's preferred languages
-/// (most preferred first, like `en-GB` or `zh-Hans-CN`) that has a translation egui
-/// can draw, or English. Returns it.
-pub(super) fn init(preferred: &[String]) -> &'static str {
-    let language = preferred
-        .iter()
-        .find_map(|tag| match_language(tag))
+/// Switches the interface to a language: `choice` is one of `languages()`, or `None` for the
+/// first of the Windows display languages (`preferred_languages`) that has a translation
+/// egui can draw, or English. Returns the language now in use.
+pub(super) fn set_language(choice: Option<&str>) -> &'static str {
+    let language = choice
+        .and_then(match_language)
+        .or_else(|| {
+            preferred_languages()
+                .iter()
+                .find_map(|tag| match_language(tag))
+        })
         .unwrap_or(ENGLISH);
-    STRINGS.get_or_init(|| Strings::new(language)).language
+    let strings = load(language);
+    *CURRENT.write().unwrap_or_else(PoisonError::into_inner) = Some(strings);
+    strings.language
 }
 
+/// The language in use.
+pub(super) fn language() -> &'static str {
+    strings().language
+}
+
+/// The languages to choose from: every translation egui can draw.
+pub(super) fn languages() -> impl Iterator<Item = &'static str> {
+    LOCALES
+        .iter()
+        .map(|(tag, _)| *tag)
+        .filter(|tag| !UNSUPPORTED.contains(tag))
+}
+
+fn load(language: &'static str) -> &'static Strings {
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(strings) = loaded.iter().find(|strings| strings.language == language) {
+        return strings;
+    }
+    let strings: &'static Strings = Box::leak(Box::new(Strings::new(language)));
+    loaded.push(strings);
+    strings
+}
+
+/// The strings in use; English until `set_language` picks a language.
 fn strings() -> &'static Strings {
-    STRINGS.get_or_init(|| Strings::new(ENGLISH))
+    if let Some(strings) = *CURRENT.read().unwrap_or_else(PoisonError::into_inner) {
+        return strings;
+    }
+    let english = load(ENGLISH);
+    CURRENT
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert(english);
+    english
 }
 
 /// The translation of `key`, from the Windows Calculator's resources.
@@ -257,16 +327,40 @@ pub(super) fn preferred_languages() -> Vec<String> {
     Vec::new()
 }
 
-/// A Windows font with the script of a language that Segoe UI doesn't cover, and its
-/// index in the font collection (the "UI" variants of the CJK fonts).
-pub(super) fn script_font(language: &str) -> Option<(&'static str, u32)> {
+/// A Windows font file and its index in the font collection (the "UI" variants of the
+/// CJK fonts).
+pub(super) type ScriptFont = (&'static str, u32);
+
+const JAPANESE: ScriptFont = ("YuGothM.ttc", 1);
+const SIMPLIFIED_CHINESE: ScriptFont = ("msyh.ttc", 1);
+const TRADITIONAL_CHINESE: ScriptFont = ("msjh.ttc", 1);
+const KOREAN: ScriptFont = ("malgun.ttf", 0);
+const THAI: ScriptFont = ("LeelawUI.ttf", 0);
+const ETHIOPIC: ScriptFont = ("ebrima.ttf", 0);
+
+/// The fonts for lists that show languages and regions in their own scripts. Yu Gothic has
+/// the Chinese characters of their names too (`中文(台灣)`, `中文(香港特別行政區)`), so the
+/// two Chinese fonts, some 40 MB, stay out.
+pub(super) const LIST_FONTS: [ScriptFont; 4] = [JAPANESE, KOREAN, THAI, ETHIOPIC];
+
+/// The Windows font with the script of a language or region (a tag like `ja-JP` or
+/// `zh-Hant-HK`) where Segoe UI doesn't cover it.
+pub(super) fn script_font(tag: &str) -> Option<ScriptFont> {
+    let tag = tag.to_ascii_lowercase();
+    let mut parts = tag.split(['-', '_']);
+    let language = parts.next()?;
+    let rest: Vec<&str> = parts.collect();
+    let traditional = ["hant", "tw", "hk", "mo"]
+        .iter()
+        .any(|part| rest.contains(part));
     match language {
-        "ja-JP" => Some(("YuGothM.ttc", 1)),
-        "zh-CN" => Some(("msyh.ttc", 1)),
-        "zh-TW" => Some(("msjh.ttc", 1)),
-        "ko-KR" => Some(("malgun.ttf", 0)),
-        "th-TH" => Some(("LeelawUI.ttf", 0)),
-        "am-ET" => Some(("ebrima.ttf", 0)),
+        "ja" => Some(JAPANESE),
+        "zh" if traditional => Some(TRADITIONAL_CHINESE),
+        "zh" => Some(SIMPLIFIED_CHINESE),
+        "ko" => Some(KOREAN),
+        "th" => Some(THAI),
+        // Amharic, Tigrinya and the other languages written in Ge'ez.
+        "am" | "ti" | "byn" | "gez" | "tig" | "wal" => Some(ETHIOPIC),
         _ => None,
     }
 }
@@ -311,6 +405,38 @@ mod tests {
         assert_eq!(match_language("hi-IN"), None);
         // Not translated.
         assert_eq!(match_language("xx-YY"), None);
+    }
+
+    #[test]
+    fn every_language_has_calccraft_strings() {
+        let english = parse(own(ENGLISH));
+        assert_eq!(english.len(), 3);
+        for language in languages() {
+            let table = parse(own(language));
+            for key in english.keys() {
+                assert!(table.contains_key(key), "{language} has no {key}");
+            }
+        }
+        // The tables are looked up without the global language, which other tests use.
+        assert_eq!(load("de-DE").get("CalcCraft.Language"), "Sprache");
+        assert_eq!(load("de-DE").get("HistoryLabel.Text"), "Verlauf");
+        assert_eq!(load("ja-JP").get("CalcCraft.RegionalFormat"), "地域設定");
+        // Languages without their own section fall back to English.
+        assert_eq!(load("ar-SA").get("CalcCraft.Language"), "Language");
+        assert_eq!(languages().count(), LOCALES.len() - UNSUPPORTED.len());
+    }
+
+    #[test]
+    fn script_fonts() {
+        assert_eq!(script_font("ja-JP"), Some(JAPANESE));
+        assert_eq!(script_font("zh-CN"), Some(SIMPLIFIED_CHINESE));
+        assert_eq!(script_font("zh-SG"), Some(SIMPLIFIED_CHINESE));
+        assert_eq!(script_font("zh-Hant-HK"), Some(TRADITIONAL_CHINESE));
+        assert_eq!(script_font("zh-TW"), Some(TRADITIONAL_CHINESE));
+        assert_eq!(script_font("ko-KR"), Some(KOREAN));
+        assert_eq!(script_font("ti-ET"), Some(ETHIOPIC));
+        assert_eq!(script_font("de-DE"), None);
+        assert_eq!(script_font("ru-RU"), None);
     }
 
     #[test]
