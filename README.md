@@ -18,8 +18,9 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   in a side panel with History and Memory tabs, as in Windows; narrower windows open them over
   the keypad.
 - **Keep on top:** a compact always-on-top window, the same as in Windows.
-- **Settings:** opened from the menu, as in Windows. It has the App theme choice, the app version,
-  and links for sending feedback and to the project on GitHub.
+- **Settings:** opened from the menu, as in Windows. It has the App theme choice, the Language and
+  Regional format choices, the app version, and links for sending feedback and to the project on
+  GitHub.
 - **Light and dark themes:** pick Light, Dark or Use system setting in Settings. With the system
   setting, the app follows the Windows app mode, even when it changes while the app is open.
   The title bar switches with it. The choice is saved in `%APPDATA%\CalcCraft`.
@@ -38,7 +39,9 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   "Memory store", …) and announces results as they change ("Display is 7").
 - **50 languages:** the interface uses the Windows Calculator's own translations and follows the
   Windows display language. Numbers, dates and the first day of the week follow your regional
-  format (`1.234,5` and `15. Oktober 2026` in Germany), as in Windows.
+  format (`1.234,5` and `15. Oktober 2026` in Germany), as in Windows. Unlike Windows, Settings
+  can also set the language and the regional format for CalcCraft alone: type the first letters
+  of a name to find it in the list.
 - **Date calculation mode** (open the ☰ menu):
   - **Difference between dates:** the difference broken into years, months, weeks and days,
     plus the total number of days (`4 years, 4 months, 4 days`, `1587 days`).
@@ -124,14 +127,18 @@ Contributors (people and AI agents alike)
 should read [AGENTS.md](AGENTS.md) first: it describes the architecture, the Windows behaviors
 that the tests pin down, and known pitfalls.
 
-To try another language or regional format, set `CALCCRAFT_LANGUAGE` and `CALCCRAFT_REGION`
-(for example to `de-DE`) before starting the app. The strings in `locales/` come from the
-Windows Calculator's resource files; after adding a string to `tools/import-strings.ps1`,
-regenerate them from a clone of [microsoft/calculator](https://github.com/microsoft/calculator):
+Besides the Language and Regional format settings, `CALCCRAFT_LANGUAGE` and `CALCCRAFT_REGION`
+(for example `de-DE`) stand in for the Windows settings that "Use system setting" follows, which
+helps testing. The strings in `locales/` come from the Windows Calculator's resource files;
+after adding a string to `tools/import-strings.ps1`, regenerate them from a clone of
+[microsoft/calculator](https://github.com/microsoft/calculator):
 
 ```bash
 pwsh tools/import-strings.ps1 -Source ../win-calculator
 ```
+
+The few strings Windows doesn't have (the Language and Regional format settings) are
+CalcCraft's own, translated by hand in `locales/calccraft.txt`.
 
 ## Releasing
 
@@ -168,7 +175,7 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/app/palette.rs` | The dark and light color palettes |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
 | `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
-| `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1` |
+| `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1`, and CalcCraft's own few in `calccraft.txt` |
 | `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |

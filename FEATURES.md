@@ -914,7 +914,9 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
   - Decimal and grouping separators and date formats follow the system region (the user locale,
     including changes made in Settings): see "Regional formats" in AGENTS.md.
   - Japanese, Chinese, Korean, Thai and Amharic load a Windows font with their script.
-  - `CALCCRAFT_LANGUAGE` and `CALCCRAFT_REGION` override the language and the region.
+  - Settings can pick another language and regional format for CalcCraft alone
+    (`FEAT-SHELL-008`); "Use system setting" follows Windows, or `CALCCRAFT_LANGUAGE` and
+    `CALCCRAFT_REGION` where they're set.
 - **Differences:** right-to-left and complex scripts are `FEAT-SHELL-011`. Numbers always use
   Western digits, and dates the Gregorian calendar. The contribute sentence in Settings stays
   English (its translations name the Windows Calculator). Pasted text loses its group separators
@@ -926,13 +928,23 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 - **Priority:** `P1`
 - **Depends On:** `FEAT-SHELL-001`
 - **Windows ref:** `src/Calculator/Views/Settings.xaml`
-- **Rust:** `src/app.rs` (`draw_settings`, `settings_content`)
+- **Rust:** `src/app.rs` (`draw_settings`, `settings_content`, `ComboCard`, `draw_combo_card`,
+  `draw_settings_list`), `src/app/region.rs` (`regions`, `native_name`)
 - **Description:** Opened from the bottom of the menu; replaces the current mode until you go back (`Esc` or the back button).
 - **Acceptance Criteria:**
-  - Appearance: the expandable App theme card (`FEAT-SHELL-003`).
+  - Appearance: the expandable App theme card (`FEAT-SHELL-003`), then a Language and a Regional
+    format card with a drop-down each, like WinUI's `SettingsCard` with a `ComboBox`: the box sits
+    right of the text, or under it in cards narrower than 476 px.
+  - The lists start with "Use system setting", then the 50 languages or Windows' regional
+    formats (those egui can draw that use the Gregorian calendar) by their own names
+    (`Deutsch (Schweiz)`), sorted. Typing the first letters jumps to a name. The Regional format
+    card shows an example in the chosen format (`1’234’567.89 · 15. Oktober 2026`).
+  - A choice applies at once and is saved as `CalcCraftLanguage` / `CalcCraftRegionalFormat`.
   - About: icon, name and version; "Send feedback" and GitHub links.
 - **Differences:** no license or privacy statement links in About. `Esc` goes back; Windows
-  ignores it on this page.
+  ignores it on this page. Windows has no Language and Regional format settings (it follows
+  Windows'), so their labels are CalcCraft's own translations (`locales/calccraft.txt`), not
+  Microsoft's.
 
 #### `FEAT-SHELL-009` App Identity (icons, title bar)
 - **Status:** `[x] COMPLETED`
@@ -1005,3 +1017,4 @@ Windows source in `../win-calculator`.
 | 2026-10-15 | Claude Code | `FEAT-CONV-001`–`FEAT-CONV-013` | Added the 12 offline unit converters: `src/converter.rs` ports `UnitConverter`, the units, factors and region defaults of `UnitConverterDataLoader.cs` and the field logic of `UnitConverterViewModel.cs`; `src/app/converter_view.rs` draws `UnitConverter.xaml` (portrait and landscape). Updated `FEAT-SHELL-001` (Converter menu group) and `FEAT-SHELL-002`; Currency (`FEAT-CONV-014`) stays open |
 | 2026-10-15 | Claude Code | `FEAT-SHELL-004` | Added the converters' "About equal to" results: `Converter::suggestions` ports `CalculateSuggested` with the everyday comparison units of `UnitConverterDataLoader.cs`, and `draw_suggestions` lays them out like `SupplementaryResults.xaml` and `HorizontalNoOverflowStackPanel` |
 | 2026-10-15 | Claude Code | `FEAT-SHELL-002`, `-005`, `-006`, `-007`, `-010`, `-011` | Finished Phase 8: the docked history and memory panel and Windows' 320 × 500 minimum size; `Alt+1`, `Alt+5` and `Ctrl+E`; keyboard focus with focus visuals and screen reader names for every control (`src/app/access.rs`); the Windows Calculator's translations in 60 languages (`tools/import-strings.ps1`, `locales/`) and the regional number and date formats (`src/locale.rs`, `src/app/region.rs`). Split right-to-left and complex scripts into `FEAT-SHELL-011`, blocked by egui's text layout |
+| 2026-10-15 | Claude Code | `FEAT-SHELL-007`, `FEAT-SHELL-008` | Added the Language and Regional format settings: drop-down cards in Appearance that switch the language and the formats at runtime and save them, with names in their own scripts, type-ahead, and CalcCraft's own translations of their labels (`locales/calccraft.txt`) |
