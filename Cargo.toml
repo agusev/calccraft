@@ -1,9 +1,9 @@
 [package]
 name = "calculator"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
-description = "A clone of the Windows 11 Calculator (Standard, Programmer, Date calculation and unit converters) built with egui"
+description = "A clone of the Windows 11 Calculator (Standard, Scientific, Programmer, Date calculation and unit converters) built with egui"
 readme = "README.md"
 publish = false
 
