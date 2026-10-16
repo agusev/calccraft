@@ -116,6 +116,55 @@ $keys = @(
     'ClearMemoryItemButton.AutomationName'
     'MemPlusItem.AutomationName'
     'MemMinusItem.AutomationName'
+    # Programmer mode
+    'ProgrammerModeText'
+    'aButton.AutomationName'
+    'bButton.AutomationName'
+    'cButton.AutomationName'
+    'dButton.AutomationName'
+    'eButton.AutomationName'
+    'fButton.AutomationName'
+    'andButton.AutomationName'
+    'orButton.AutomationName'
+    'notButton.AutomationName'
+    'nandButton.AutomationName'
+    'norButton.AutomationName'
+    'xorButton.AutomationName'
+    'lshButton.AutomationName'
+    'rshButton.AutomationName'
+    'rshLogicalButton.AutomationName'
+    'rolButton.AutomationName'
+    'rorButton.AutomationName'
+    'rolCarryButton.AutomationName'
+    'rorCarryButton.AutomationName'
+    'modButton.AutomationName'
+    'openParenthesisButton.AutomationName'
+    'closeParenthesisButton.AutomationName'
+    'Format_OpenParenthesisAutomationNamePrefix'
+    'bitwiseButton.Text'
+    'bitShiftButton.Text'
+    'bitwiseButton.AutomationName'
+    'bitShiftButton.AutomationName'
+    'arithmeticShiftButton.Content'
+    'logicalShiftButton.Content'
+    'rotateCircularButton.Content'
+    'rotateCarryShiftButton.Content'
+    'qwordButton.AutomationName'
+    'dwordButton.AutomationName'
+    'wordButton.AutomationName'
+    'byteButton.AutomationName'
+    'fullKeypad.AutomationName'
+    'bitFlip.AutomationName'
+    'Format_HexButtonValue'
+    'Format_DecButtonValue'
+    'Format_OctButtonValue'
+    'Format_BinButtonValue'
+    'copyMenuItem'
+    'DockPanel_MemoryList'
+    'BitFlipItemAutomationName'
+    'BitPosition'
+    'LeastSignificantBit'
+    'MostSignificantBit'
     # Date calculation
     'DateCalculationOption.AutomationName'
     'Date_DifferenceOption.Content'
@@ -162,9 +211,12 @@ $keys = @(
     'FeedbackButton.Content'
 )
 
+# The ordinal numbers the bit toggling keypad names its bits by ("2nd bit"), keys 1 to 62.
+$keys += 1..62 | ForEach-Object { "$_" }
+
 # The engine's error messages in CEngineStrings.resw: divide by zero, invalid input,
-# undefined result, overflow.
-$engineKeys = @('99', '100', '101', '107')
+# undefined result, overflow, no result (a shift by the word size or more).
+$engineKeys = @('99', '100', '101', '107', '108')
 
 $suffixes = @{
     '.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name' = '.AutomationName'
