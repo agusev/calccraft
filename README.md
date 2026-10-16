@@ -30,7 +30,7 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   16 significant digits, Windows' rules for scientific notation, and the same error messages
   (`Cannot divide by zero`, `Result is undefined`, `Invalid input`, `Overflow`).
 - **Keyboard and clipboard:** see the shortcuts below. `Ctrl+C` copies the result. `Ctrl+V` pastes
-  a number or a whole expression such as `12 + 5 =`, with the same checks as Windows.
+  a number (`1.5e3` too) or a whole expression such as `12 + 5 =`, with the same checks as Windows.
 - **Keyboard navigation:** `Tab`, `Shift+Tab` and the arrow keys reach every control, with
   Windows' focus rectangle, and `Space` or `Enter` presses it (`Enter` stays `=` on the keypad).
   Menus, lists and the calendar open on their selected item and hand the focus back when they
@@ -42,6 +42,21 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
   format (`1.234,5` and `15. Oktober 2026` in Germany), as in Windows. Unlike Windows, Settings
   can also set the language and the regional format for CalcCraft alone: type the first letters
   of a name to find it in the list.
+- **Scientific mode** (open the ☰ menu, or `Alt+2`):
+  - Operator precedence and parentheses (`2 + 3 × 4 = 14`), with the open count on `(`.
+  - Powers and roots (`x²`, `x³`, `xʸ`, `10ˣ`, `2ˣ`, `eˣ`, `√x`, `∛x`, `ʸ√x`), `log`, `ln`,
+    `logᵧx`, `n!` (the gamma function for fractions: `0.5!` is `√π / 2`), `|x|`, `⌊x⌋`, `⌈x⌉`,
+    `mod`, `π`, `e` and `rand`; `2nd` shows the second functions.
+  - The Trigonometry menu: `sin`, `cos`, `tan`, `sec`, `csc`, `cot`, their inverses (`2nd`) and
+    hyperbolic versions (`hyp`), in degrees, radians or gradians. The Function menu adds
+    `→dms` and `→deg` for degrees, minutes and seconds.
+  - `exp` types an exponent (`1.5e+3`), and `F-E` switches to scientific notation.
+  - 32 significant digits, as in Windows (`3.1415926535897932384626433832795`), Windows'
+    error rules (`tan(90°)` is `Invalid input`) and expression line (`sin₀(30)`, `2 ^ 10 =`).
+  - Its own history; memory is shared with the other modes.
+
+![Screenshot of the scientific mode](docs/scientific.png)
+
 - **Date calculation mode** (open the ☰ menu):
   - **Difference between dates:** the difference broken into years, months, weeks and days,
     plus the total number of days (`4 years, 4 months, 4 days`, `1587 days`).
@@ -97,12 +112,32 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `Ctrl+H` | Show or hide history (in narrow windows) |
 | `Ctrl+Shift+D` | Clear history |
 | `Ctrl+C` / `Ctrl+V` | Copy the result / paste a number or an expression |
-| `Alt+1` / `Alt+4` / `Alt+5` or `Ctrl+E` | Standard / Programmer / Date calculation mode |
+| `Alt+1` / `Alt+2` / `Alt+4` / `Alt+5` or `Ctrl+E` | Standard / Scientific / Programmer / Date calculation mode |
 | `Tab` / `Shift+Tab`, arrow keys | Move the keyboard focus |
 | `Space` or `Enter` | Press the focused control (`Enter` is `=` on the keypad) |
 
 In the date calculation mode, `Esc` closes the open calendar or list, `Page Up` and `Page Down`
 flip the calendar's pages, and `Ctrl+C` copies the result.
+
+In the scientific mode, these keys are added (Windows' own):
+
+| Key | Action |
+| --- | --- |
+| `S` / `O` / `T` / `U` / `I` / `J` | `sin` / `cos` / `tan` / `sec` / `csc` / `cot` |
+| `Shift` + those keys | The inverse functions (`sin⁻¹` …) |
+| `Ctrl` + those keys, `Ctrl+Shift` + those keys | The hyperbolic functions (`sinh` …) and their inverses |
+| `^` or `Y`, `Ctrl+Y` | `xʸ`, `ʸ√x` |
+| `Q`, `#`, `@`, `B` | `x²`, `x³`, `√x`, `∛x` |
+| `Ctrl+G`, `G`, `Ctrl+N` | `10ˣ`, `2ˣ`, `eˣ` |
+| `L`, `N`, `Shift+L` | `log`, `ln`, `logᵧx` |
+| `!`, `\|`, `[`, `]` | `n!`, `\|x\|`, `⌊x⌋`, `⌈x⌉` |
+| `%` | `mod` |
+| `P`, `Shift+E`, `Shift+R` | `π`, `e`, `rand` |
+| `X`, `V` | `exp`, `F-E` |
+| `M` | `→dms` |
+| `R` | Reciprocal (`1/x`) |
+| `F4` / `F5` / `F3` | Radians / gradians / degrees (as in Windows, each is the key of the unit button before it) |
+| `(` `)` | Parentheses |
 
 In the programmer mode, Windows' own keys apply:
 
@@ -197,7 +232,8 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/main.rs` | Entry point: window options |
 | `src/icon.rs` | The app icon, drawn in code: the window icon and the icon embedded in the executable |
 | `build.rs` | Embeds the icon and the version information (CalcCraft, version from `Cargo.toml`) into `calculator.exe` |
-| `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for the Programmer and a future Scientific mode), exact arithmetic, number formatting, paste, memory, history, unit tests. No UI code. |
+| `src/engine.rs` | Calculator logic: a port of the Windows engine (immediate execution, plus operator precedence and parentheses for the Scientific and Programmer modes), exact arithmetic, number formatting, exponent entry, paste, memory, history, unit tests. No UI code. |
+| `src/engine/math.rs` | The Scientific mode's functions: powers, roots, logarithms, trigonometry, hyperbolic functions, the gamma function, computed with a few hundred bits and Windows' domain rules; unit tests. No UI code. |
 | `src/engine/integer.rs` | The Programmer mode's integer mode: radixes, word sizes, two's complement, bitwise operators, shifts and rotations, digit limits and paste rules; unit tests. No UI code. |
 | `src/dates.rs` | Date logic: difference in years, months, weeks and days; adding and subtracting; date formats; unit tests. No UI code. |
 | `src/converter.rs` | Unit converter logic: a port of the Windows converter with its units, factors, rounding and region defaults; paste; unit tests. No UI code. |
@@ -209,20 +245,25 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 | `src/app/palette.rs` | The dark and light color palettes |
 | `src/app/date_view.rs` | User interface of the date calculation mode: date pickers, calendar, drop-down lists |
 | `src/app/converter_view.rs` | User interface of the converters: values, unit drop-downs, keypad |
+| `src/app/scientific_view.rs` | User interface of the scientific mode: angle unit and F-E, Trigonometry and Function menus, keypad with `2nd` |
 | `src/app/programmer_view.rs` | User interface of the programmer mode: radix list, word size, Bitwise and Bit shift menus, keypad, bit toggling keypad |
 | `locales/` | The strings in 60 languages, imported from the Windows Calculator by `tools/import-strings.ps1`, and CalcCraft's own few in `calccraft.txt` |
-| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/date-calculation.png`, `docs/programmer.png`, `docs/unit-converter.png` | The screenshots shown above |
+| `docs/screenshot.png`, `docs/screenshot-light.png`, `docs/scientific.png`, `docs/date-calculation.png`, `docs/programmer.png`, `docs/unit-converter.png` | The screenshots shown above |
 | `.github/workflows/` | GitHub Actions: CI checks and the release build |
 | `AGENTS.md` | Guide for contributors and AI coding agents |
 | `CLAUDE.md` | Entry point for Claude Code (imports `AGENTS.md`) |
 
 ## Differences from Windows Calculator
 
-- The Standard, Programmer and Date calculation modes and 12 of the 13 converters exist. The
-  scientific and graphing modes and the Currency converter are not implemented.
-- Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle)
-  and the Programmer mode's icons are similar Segoe Fluent Icons glyphs or drawn in code:
-  Windows draws them from the Calculator's own icon font, which can't be used outside Windows.
+- The Standard, Scientific, Programmer and Date calculation modes and 12 of the 13 converters
+  exist. The graphing mode and the Currency converter are not implemented.
+- Six converter icons in the menu (Volume, Weight and mass, Temperature, Speed, Data, Angle),
+  the Programmer mode's icons and the Scientific mode's key labels (`x²`, `xʸ`, `2ⁿᵈ`, …) and
+  menu icons are similar Segoe Fluent Icons glyphs, Segoe UI text or drawn in code: Windows draws
+  them from the Calculator's own icon font, which can't be used outside Windows.
+- The Scientific mode computes its functions with about 120 digits and keeps 40, so the 32
+  digits it shows are those of the exact result. Windows computes with about 32 digits, so some
+  of its results may differ in the last digit.
 - Dates always use the Gregorian calendar, even in regions that use another one.
 - The palettes are fixed: both themes use the purple tint and accent color of the reference
   screenshots. Windows tints its window with the Mica effect and your own accent color.

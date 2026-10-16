@@ -283,6 +283,8 @@ impl IntegerMode {
                     }
                 }
             }
+            // The Scientific mode's operators don't exist here.
+            Op::Power | Op::Root | Op::LogBase => return Err(CalcError::InvalidInput),
         })
     }
 

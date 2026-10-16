@@ -6,6 +6,7 @@ mod date_view;
 mod palette;
 mod programmer_view;
 mod region;
+mod scientific_view;
 mod strings;
 
 use std::sync::{Arc, OnceLock};
@@ -13,13 +14,13 @@ use std::time::Duration;
 
 use eframe::egui::{
     self, Align, Align2, Color32, Context, CornerRadius, CursorIcon, Event, FontFamily, FontId,
-    Galley, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextFormat,
-    TextureHandle, TextureOptions, Ui, UiBuilder, ViewportCommand, WidgetInfo, WidgetType,
-    WindowLevel, pos2, text::LayoutJob, vec2,
+    Galley, Id, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, StrokeKind,
+    TextFormat, TextureHandle, TextureOptions, Ui, UiBuilder, ViewportCommand, WidgetInfo,
+    WidgetType, WindowLevel, pos2, text::LayoutJob, vec2,
 };
 
 use crate::converter::Category;
-use crate::engine::{Calculator, Command, Func, Op, Radix, format_number};
+use crate::engine::{Angle, Calculator, Command, Func, Op, Radix};
 use palette::Palette;
 use strings::{tr, tr_format};
 
@@ -38,6 +39,8 @@ const ICON_CALCULATOR: char = '\u{E8EF}';
 /// The Programmer mode in the menu, `</>`. Windows draws it from the Calculator's own
 /// icon font, which only Windows may use.
 const ICON_CODE: char = '\u{E943}';
+/// The Scientific mode in the menu (`NavCategory`'s glyph, which Segoe Fluent Icons has).
+const ICON_SCIENTIFIC: char = '\u{F196}';
 const ICON_MULTIPLY: char = '\u{E947}';
 const ICON_PLUS: char = '\u{E948}';
 const ICON_MINUS: char = '\u{E949}';
@@ -289,6 +292,7 @@ enum Panel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Standard,
+    Scientific,
     Programmer,
     DateCalculation,
     Converter(Category),
@@ -296,11 +300,17 @@ enum Mode {
 
 impl Mode {
     /// The modes of the menu's "Calculator" group; the converters follow.
-    const CALCULATORS: [Mode; 3] = [Mode::Standard, Mode::Programmer, Mode::DateCalculation];
+    const CALCULATORS: [Mode; 4] = [
+        Mode::Standard,
+        Mode::Scientific,
+        Mode::Programmer,
+        Mode::DateCalculation,
+    ];
 
     fn title(self) -> &'static str {
         match self {
             Mode::Standard => tr("StandardModeText"),
+            Mode::Scientific => tr("ScientificModeText"),
             Mode::Programmer => tr("ProgrammerModeText"),
             Mode::DateCalculation => tr("DateCalculationModeText"),
             Mode::Converter(category) => category_name(category),
@@ -309,10 +319,11 @@ impl Mode {
 
     /// The mode an `Alt` + digit shortcut opens. Windows' `NavCategory` gives the
     /// calculators `Alt+1` (Standard) to `Alt+5` (Date calculation) and the converters
-    /// none; Scientific and Graphing don't exist here yet.
+    /// none; Graphing (`Alt+3`) doesn't exist here yet.
     fn for_alt_key(key: Key) -> Option<Mode> {
         match key {
             Key::Num1 => Some(Mode::Standard),
+            Key::Num2 => Some(Mode::Scientific),
             Key::Num4 => Some(Mode::Programmer),
             Key::Num5 => Some(Mode::DateCalculation),
             _ => None,
@@ -322,7 +333,12 @@ impl Mode {
     /// The modes with a keypad engine. Windows' calculator view model switches its
     /// engine between them, and they share the memory.
     fn is_calculator(self) -> bool {
-        matches!(self, Mode::Standard | Mode::Programmer)
+        matches!(self, Mode::Standard | Mode::Scientific | Mode::Programmer)
+    }
+
+    /// The modes with a history (Windows gives the Programmer engine none).
+    fn has_history(self) -> bool {
+        matches!(self, Mode::Standard | Mode::Scientific)
     }
 }
 
@@ -383,15 +399,20 @@ enum Kind {
     Accent,
     /// Transparent button (memory row, header icons).
     Subtle,
+    /// The Scientific mode's second functions while `2nd` is on: an operator key that
+    /// turns to the accent color on hover (`EmphasizedCalcButtonStyle`).
+    Emphasized,
 }
 
 pub struct CalculatorApp {
     mode: Mode,
-    /// The Standard mode's engine; the Programmer mode has its own in `programmer`.
+    /// The Standard mode's engine; the Scientific and Programmer modes have their own in
+    /// `scientific` and `programmer`.
     calc: Calculator,
+    scientific: scientific_view::ScientificState,
     programmer: programmer_view::ProgrammerState,
-    /// The calculator mode with a keypad (Standard or Programmer) used last, which has
-    /// the memory.
+    /// The calculator mode with a keypad (Standard, Scientific or Programmer) used last,
+    /// which has the memory.
     last_calculator: Mode,
     date: date_view::DateState,
     converter: converter_view::ConverterState,
@@ -480,6 +501,7 @@ impl CalculatorApp {
         Self {
             mode: Mode::Standard,
             calc: Calculator::default(),
+            scientific: scientific_view::ScientificState::new(),
             programmer: programmer_view::ProgrammerState::new(),
             last_calculator: Mode::Standard,
             date: date_view::DateState::new(),
@@ -520,23 +542,24 @@ impl CalculatorApp {
             || self.date.popup_open()
             || self.converter.popup_open()
             || self.programmer.popup_open()
+            || self.scientific.popup_open()
             || self.settings_popup.is_some()
     }
 
     /// The engine of the calculator mode on screen (or used last).
     fn engine(&self) -> &Calculator {
-        if self.last_calculator == Mode::Programmer {
-            &self.programmer.calc
-        } else {
-            &self.calc
+        match self.last_calculator {
+            Mode::Programmer => &self.programmer.calc,
+            Mode::Scientific => &self.scientific.calc,
+            _ => &self.calc,
         }
     }
 
     fn engine_mut(&mut self) -> &mut Calculator {
-        if self.last_calculator == Mode::Programmer {
-            &mut self.programmer.calc
-        } else {
-            &mut self.calc
+        match self.last_calculator {
+            Mode::Programmer => &mut self.programmer.calc,
+            Mode::Scientific => &mut self.scientific.calc,
+            _ => &mut self.calc,
         }
     }
 
@@ -604,15 +627,16 @@ impl CalculatorApp {
     fn set_mode(&mut self, mode: Mode) {
         if mode.is_calculator() && mode != self.last_calculator {
             // Windows switches the engine: the memory goes along, and the engine starts
-            // over (`SetStandardMode`, `SetProgrammerMode`). Leaving the Programmer mode
-            // turns its bit toggling keypad off. Date calculation and the converters in
-            // between change nothing.
+            // over (`SetStandardMode`, `SetScientificMode`, `SetProgrammerMode`). Leaving
+            // the Programmer mode turns its bit toggling keypad off. Date calculation and
+            // the converters in between change nothing.
             let memory = self.engine_mut().take_memory();
+            let left = self.last_calculator;
             self.last_calculator = mode;
             let engine = self.engine_mut();
             engine.set_memory(memory);
             engine.reset();
-            if mode == Mode::Standard {
+            if left == Mode::Programmer {
                 self.programmer.bit_flip = false;
             }
         }
@@ -623,6 +647,7 @@ impl CalculatorApp {
         self.date.close_popup();
         self.converter.close_popup();
         self.programmer.close_popup();
+        self.scientific.close_popup();
         if let Mode::Converter(category) = mode {
             self.converter.converter.set_category(category);
         }
@@ -694,18 +719,23 @@ impl CalculatorApp {
         // (`HonorShortcuts(false)`); Esc closes them.
         let covered = self.flyout == Flyout::Navigation
             || self.context_menu.is_some()
-            || self.programmer.popup_open();
+            || self.programmer.popup_open()
+            || self.scientific.popup_open();
         let events = ctx.input(|i| i.events.clone());
         let now = ctx.input(|i| i.time);
         for event in events {
             match event {
                 Event::Text(text) if !covered => {
-                    let commands: Vec<Command> = if self.mode == Mode::Programmer {
-                        text.chars()
+                    let commands: Vec<Command> = match self.mode {
+                        Mode::Programmer => text
+                            .chars()
                             .filter_map(|c| self.programmer.char_command(c))
-                            .collect()
-                    } else {
-                        text.chars().filter_map(char_command).collect()
+                            .collect(),
+                        Mode::Scientific => text
+                            .chars()
+                            .filter_map(scientific_view::ScientificState::char_command)
+                            .collect(),
+                        _ => text.chars().filter_map(char_command).collect(),
                     };
                     for command in commands {
                         self.press(command, now);
@@ -738,7 +768,13 @@ impl CalculatorApp {
 
     fn handle_key(&mut self, ctx: &Context, key: Key, modifiers: Modifiers, now: f64) {
         let programmer = self.mode == Mode::Programmer;
-        let command = if modifiers.command {
+        // The Scientific mode's letter keys, some with Shift or Ctrl (sinh is Ctrl+S).
+        let scientific = (self.mode == Mode::Scientific && key != Key::Escape)
+            .then(|| scientific_view::ScientificState::key_command(key, modifiers))
+            .flatten();
+        let command = if let Some(command) = scientific {
+            command
+        } else if modifiers.command {
             match key {
                 Key::M => Command::MemoryStore,
                 Key::P => Command::MemoryAdd,
@@ -750,7 +786,7 @@ impl CalculatorApp {
                 // The docked panel already shows the history, so Windows ignores it then.
                 Key::H if self.docked => return,
                 Key::H => return self.toggle_flyout(Flyout::History),
-                Key::D if modifiers.shift => return self.calc.clear_history(),
+                Key::D if modifiers.shift => return self.engine_mut().clear_history(),
                 _ => return,
             }
         } else if let Some(command) = programmer
@@ -771,6 +807,7 @@ impl CalculatorApp {
                 }
                 Key::Escape if self.context_menu.is_some() => return self.context_menu = None,
                 Key::Escape if self.programmer.close_popup() => return,
+                Key::Escape if self.scientific.close_popup() => return,
                 Key::Escape if self.flyout != Flyout::None => return self.flyout = Flyout::None,
                 Key::Escape => {
                     // egui drops the focus on Esc; in Windows it's only `C`.
@@ -869,6 +906,24 @@ impl CalculatorApp {
             RADIUS,
             access::button(enabled, name),
         );
+        self.paint_key(ui, rect, kind, enabled, &response, flash, label);
+        enabled && response.clicked()
+    }
+
+    /// Paints a button of `kind` in its state (disabled, hovered, pressed, or flashing
+    /// for its keyboard key) with its label.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_key(
+        &self,
+        ui: &Ui,
+        rect: Rect,
+        kind: Kind,
+        enabled: bool,
+        response: &Response,
+        flash: bool,
+        label: LayoutJob,
+    ) {
+        let p = self.palette;
         let pressed = enabled && (response.is_pointer_button_down_on() || flash);
         let hovered = enabled && response.hovered();
 
@@ -884,8 +939,9 @@ impl CalculatorApp {
         let fill = match kind {
             Kind::Digit if !enabled => p.digit_disabled,
             Kind::Digit => pick(p.digit, p.digit_hover, p.digit_pressed),
-            Kind::Operator if !enabled => p.operator_disabled,
+            Kind::Operator | Kind::Emphasized if !enabled => p.operator_disabled,
             Kind::Operator => pick(p.operator, p.operator_hover, p.operator_pressed),
+            Kind::Emphasized => pick(p.operator, p.emphasized_hover, p.emphasized_pressed),
             Kind::Accent if !enabled => p.accent_disabled,
             Kind::Accent => pick(p.accent, p.accent_hover, p.accent_pressed),
             Kind::Subtle => pick(Color32::TRANSPARENT, p.subtle_hover, p.subtle_pressed),
@@ -894,6 +950,8 @@ impl CalculatorApp {
             p.text_disabled
         } else if kind == Kind::Accent {
             p.text_on_accent
+        } else if kind == Kind::Emphasized && (pressed || hovered) {
+            p.text_on_emphasized
         } else if pressed {
             p.text_pressed
         } else {
@@ -902,12 +960,11 @@ impl CalculatorApp {
 
         let painter = ui.painter();
         painter.rect_filled(rect, RADIUS, fill);
-        if matches!(kind, Kind::Digit | Kind::Operator) {
+        if matches!(kind, Kind::Digit | Kind::Operator | Kind::Emphasized) {
             painter.rect_stroke(rect, RADIUS, Stroke::new(1.0, p.border), StrokeKind::Inside);
         }
         let galley = painter.layout_job(label);
         painter.galley(rect.center() - galley.size() / 2.0, galley, text);
-        enabled && response.clicked()
     }
 
     /// A label made of one icon glyph (or fallback text without the icon font).
@@ -964,26 +1021,24 @@ impl CalculatorApp {
             FontId::new(20.0, semibold()),
             p.text,
         );
-        // Keep on top and history exist only in the Standard mode, and the history
-        // button only while the history isn't docked.
-        if self.mode != Mode::Standard {
-            return;
+        // Keep on top exists only in the Standard mode, the history in the Standard and
+        // Scientific modes, and its button only while the history isn't docked.
+        if self.mode == Mode::Standard {
+            let label = self.icon(ICON_KEEP_ON_TOP, "⇲", 14.0);
+            let keep_on_top = icon_button(title.right() + 26.0);
+            if self.button(
+                ui,
+                keep_on_top,
+                Id::new("keep-on-top"),
+                Kind::Subtle,
+                true,
+                label,
+                tr("EnterAlwaysOnTopButton.AutomationName"),
+            ) {
+                self.set_compact(&ctx, true);
+            }
         }
-
-        let label = self.icon(ICON_KEEP_ON_TOP, "⇲", 14.0);
-        let keep_on_top = icon_button(title.right() + 26.0);
-        if self.button(
-            ui,
-            keep_on_top,
-            Id::new("keep-on-top"),
-            Kind::Subtle,
-            true,
-            label,
-            tr("EnterAlwaysOnTopButton.AutomationName"),
-        ) {
-            self.set_compact(&ctx, true);
-        }
-        if self.docked {
+        if !self.mode.has_history() || self.docked {
             return;
         }
 
@@ -1080,6 +1135,13 @@ impl CalculatorApp {
     // ------------------------------------------------------------ memory row
 
     fn draw_memory_row(&mut self, ui: &Ui, rect: Rect, now: f64) {
+        self.draw_memory_row_enabled(ui, rect, now, true);
+    }
+
+    /// The memory row, with its buttons disabled when `enabled` is false (while a
+    /// Scientific flyout covers the keys, Windows' `EnableMemoryControls(false)`).
+    fn draw_memory_row_enabled(&mut self, ui: &Ui, rect: Rect, now: f64, enabled: bool) {
+        let all_enabled = enabled;
         let buttons = [
             ("MC", Command::MemoryClear),
             ("MR", Command::MemoryRecall),
@@ -1101,7 +1163,7 @@ impl CalculatorApp {
                 .shrink2(vec2(1.0, 0.0))
         };
         for (i, (label, command)) in buttons.into_iter().enumerate() {
-            let enabled = self.calc.is_enabled(command);
+            let enabled = all_enabled && self.engine().is_enabled(command);
             let flash = self.is_flashing(command, now);
             let label = text(label, 12.0, semibold());
             if self.button_flash(
@@ -1114,14 +1176,14 @@ impl CalculatorApp {
                 command_name(command),
                 flash,
             ) {
-                self.calc.execute(command);
+                self.engine_mut().execute(command);
             }
         }
         if self.docked {
             return;
         }
 
-        let enabled = !self.calc.memory().is_empty() && !self.calc.has_error();
+        let enabled = !self.engine().memory().is_empty() && !self.engine().has_error();
         let label = self.memory_list_label();
         let name = if self.flyout == Flyout::Memory {
             tr("MemoryButton_Close")
@@ -1320,12 +1382,12 @@ impl CalculatorApp {
         let history = panel == Panel::History;
         // A menu whose item is gone (or that belongs to the other panel) closes.
         self.context_menu = self.context_menu.filter(|menu| match menu.target {
-            MenuTarget::History(i) => history && i < self.calc.history().len(),
+            MenuTarget::History(i) => history && i < self.engine().history().len(),
             MenuTarget::Memory(i) => !history && i < self.engine().memory().len(),
             MenuTarget::Radix(_) => true,
         });
         let empty = if history {
-            self.calc.history().is_empty()
+            self.engine().history().is_empty()
         } else {
             self.engine().memory().is_empty()
         };
@@ -1359,7 +1421,7 @@ impl CalculatorApp {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     // A flyout opened with the keyboard focuses its first item.
                     if history {
-                        for i in 0..self.calc.history().len() {
+                        for i in 0..self.engine().history().len() {
                             let focus = self.take_popup_focus(i == 0);
                             if let Some(a) = self.history_item(ui, i, focus) {
                                 action = Some(a);
@@ -1402,7 +1464,7 @@ impl CalculatorApp {
         }
         match action {
             Some(FlyoutAction::RecallHistory(i)) => {
-                self.calc.recall_history(i);
+                self.engine_mut().recall_history(i);
                 self.flyout = Flyout::None;
             }
             Some(FlyoutAction::RecallMemory(i)) => {
@@ -1411,7 +1473,7 @@ impl CalculatorApp {
             }
             Some(FlyoutAction::MemoryAdd(i, subtract)) => self.engine_mut().memory_add(i, subtract),
             Some(FlyoutAction::MemoryClear(i)) => self.engine_mut().memory_clear_item(i),
-            Some(FlyoutAction::ClearAll) if history => self.calc.clear_history(),
+            Some(FlyoutAction::ClearAll) if history => self.engine_mut().clear_history(),
             Some(FlyoutAction::ClearAll) => self.engine_mut().execute(Command::MemoryClear),
             Some(FlyoutAction::OpenMenu(target, pos)) => {
                 self.context_menu = Some(ContextMenu { target, pos });
@@ -1419,9 +1481,9 @@ impl CalculatorApp {
             // Windows copies the result as the list shows it, with separators.
             Some(FlyoutAction::CopyHistory(i)) => {
                 ui.ctx()
-                    .copy_text(numbers().localize(&format_number(&self.calc.history()[i].result)));
+                    .copy_text(numbers().localize(&self.engine().history()[i].text));
             }
-            Some(FlyoutAction::DeleteHistory(i)) => self.calc.delete_history_item(i),
+            Some(FlyoutAction::DeleteHistory(i)) => self.engine_mut().delete_history_item(i),
             Some(FlyoutAction::CopyRadix(_) | FlyoutAction::CloseMenu) | None => {}
         }
     }
@@ -1430,22 +1492,25 @@ impl CalculatorApp {
     /// right click opens its menu. `focus` gives it the keyboard focus.
     fn history_item(&self, ui: &mut Ui, index: usize, focus: bool) -> Option<FlyoutAction> {
         let p = self.palette;
-        let entry = &self.calc.history()[index];
+        let entry = &self.engine().history()[index];
         let width = ui.available_width();
         let painter = ui.painter().clone();
         let entry_expression = numbers().localize_expression(&entry.expression);
-        let entry_result = numbers().localize(&format_number(&entry.result));
-        let expression = layout_elided_left(
+        let entry_result = numbers().localize(&entry.text);
+        // Long lines wrap (`TextWrapping="Wrap"`), as the Scientific mode's 32 digits need.
+        let expression = layout_wrapped_right(
             &painter,
             &entry_expression,
             FontId::proportional(14.0),
             width - 24.0,
+            false,
         );
-        let result = layout_elided_left(
+        let result = layout_wrapped_right(
             &painter,
             &entry_result,
             FontId::new(20.0, semibold()),
             width - 24.0,
+            true,
         );
         let height = 10.0 + expression.size().y + result.size().y + 10.0;
 
@@ -1464,16 +1529,8 @@ impl CalculatorApp {
         let right = rect.right() - 12.0;
         let y = rect.top() + 10.0;
         let expression_height = expression.size().y;
-        painter.galley(
-            pos2(right - expression.size().x, y),
-            expression,
-            p.text_secondary,
-        );
-        painter.galley(
-            pos2(right - result.size().x, y + expression_height),
-            result,
-            p.text,
-        );
+        paint_right(&painter, expression, pos2(right, y), p.text_secondary);
+        paint_right(&painter, result, pos2(right, y + expression_height), p.text);
         if response.secondary_clicked() {
             let pos = response.interact_pointer_pos().unwrap_or(rect.center());
             return Some(FlyoutAction::OpenMenu(MenuTarget::History(index), pos));
@@ -1492,11 +1549,12 @@ impl CalculatorApp {
         let width = ui.available_width();
         // In the Programmer mode, in the current radix.
         let shown = self.localize_number(&calc.format_value(value));
-        let result = layout_elided_left(
+        let result = layout_wrapped_right(
             ui.painter(),
             &shown,
             FontId::new(20.0, semibold()),
             width - 24.0,
+            true,
         );
         let height = 10.0 + result.size().y + 6.0 + 26.0 + 10.0;
 
@@ -1517,11 +1575,7 @@ impl CalculatorApp {
         }
         let right = rect.right() - 12.0;
         let result_height = result.size().y;
-        painter.galley(
-            pos2(right - result.size().x, rect.top() + 10.0),
-            result,
-            p.text,
-        );
+        paint_right(painter, result, pos2(right, rect.top() + 10.0), p.text);
 
         let mut action = response
             .clicked()
@@ -1766,6 +1820,7 @@ impl CalculatorApp {
                         let item = row.shrink2(vec2(4.0, 0.0));
                         let icon = match mode {
                             Mode::Standard => self.icon(ICON_CALCULATOR, "▦", 16.0),
+                            Mode::Scientific => self.icon(ICON_SCIENTIFIC, "∫", 16.0),
                             Mode::Programmer => self.icon(ICON_CODE, "</>", 16.0),
                             Mode::DateCalculation => self.icon(ICON_CALENDAR, "▤", 16.0),
                             Mode::Converter(category) => {
@@ -2501,7 +2556,7 @@ impl CalculatorApp {
             _ if self.page == Page::Settings => self.handle_keyboard(&ctx),
             Mode::DateCalculation => self.handle_date_keyboard(&ctx),
             Mode::Converter(_) => self.handle_converter_keyboard(&ctx),
-            Mode::Standard | Mode::Programmer => self.handle_keyboard(&ctx),
+            Mode::Standard | Mode::Scientific | Mode::Programmer => self.handle_keyboard(&ctx),
         }
         let now = ctx.input(|i| i.time);
 
@@ -2539,14 +2594,23 @@ impl CalculatorApp {
             self.flyout = Flyout::None;
         }
 
-        if self.mode == Mode::Programmer {
+        if matches!(self.mode, Mode::Programmer | Mode::Scientific) {
             let header = Rect::from_min_size(main.min, vec2(main.width(), HEADER_HEIGHT));
             self.draw_header(ui, header);
-            self.draw_programmer(ui, main.with_min_y(header.bottom()), now);
+            let below = main.with_min_y(header.bottom());
+            if self.mode == Mode::Programmer {
+                self.draw_programmer(ui, below, now);
+            } else {
+                self.draw_scientific(ui, below, now);
+            }
             if let Some(dock) = dock {
                 self.draw_dock(ui, dock);
             }
-            self.draw_programmer_popups(ui);
+            if self.mode == Mode::Programmer {
+                self.draw_programmer_popups(ui);
+            } else {
+                self.draw_scientific_popups(ui);
+            }
             if self.flyout == Flyout::Navigation {
                 self.draw_navigation(ui, full);
             }
@@ -2692,6 +2756,29 @@ fn layout_elided_left(painter: &Painter, text: &str, font: FontId, max_width: f3
         );
     }
     galley
+}
+
+/// Text that wraps at `max_width` (a `number` anywhere in it), with its lines aligned to
+/// the right, like the history and memory lists' `TextBlock`s.
+fn layout_wrapped_right(
+    painter: &Painter,
+    text: &str,
+    font: FontId,
+    max_width: f32,
+    number: bool,
+) -> Arc<Galley> {
+    let mut job = LayoutJob::simple(text.to_owned(), font, Color32::PLACEHOLDER, max_width);
+    job.halign = Align::RIGHT;
+    // A number fills its lines and breaks anywhere, not after its decimal point.
+    job.wrap.break_anywhere = number;
+    painter.layout_job(job)
+}
+
+/// Paints a galley so that its right edge is at `right_top.x` and its top at `right_top.y`.
+fn paint_right(painter: &Painter, galley: Arc<Galley>, right_top: Pos2, color: Color32) {
+    let rect = galley.rect;
+    let pos = pos2(right_top.x - rect.max.x, right_top.y - rect.min.y);
+    painter.galley(pos, galley, color);
 }
 
 /// The bounding rectangle of the characters in `range`, relative to the galley.
@@ -2854,10 +2941,22 @@ fn is_calculator_key(id: Id) -> bool {
         || (0..5).any(|i| id == Id::new("memory").with(i))
         || (0..30).any(|i| id == programmer_view::key_id(i))
         || id == programmer_view::memory_store_id()
+        // The Scientific keys but `2nd`, a toggle button.
+        || (1..scientific_view::KEY_COUNT).any(|i| id == scientific_view::key_id(i))
 }
 
 /// The name a screen reader gives a key (Windows' `AutomationProperties.Name`).
 fn command_name(command: Command) -> &'static str {
+    // The trigonometry keys are named `sinButton`, `invsinButton`, `sinhButton`,
+    // `invsinhButton` and so on.
+    if let Command::Function(Func::Trig(trig)) = command {
+        let inverse = if trig.inverse { "inv" } else { "" };
+        let hyperbolic = if trig.hyperbolic { "h" } else { "" };
+        let label = trig.function.label();
+        return tr(&format!(
+            "{inverse}{label}{hyperbolic}Button.AutomationName"
+        ));
+    }
     tr(match command {
         Command::Digit(0) => "num0Button.AutomationName",
         Command::Digit(1) => "num1Button.AutomationName",
@@ -2905,6 +3004,31 @@ fn command_name(command: Command) -> &'static str {
         Command::Function(Func::Square) => "xpower2Button.AutomationName",
         Command::Function(Func::SquareRoot) => "squareRootButton.AutomationName",
         Command::Function(Func::Negate) => "negateButton.AutomationName",
+        Command::Function(Func::Cube) => "xpower3Button.AutomationName",
+        Command::Function(Func::CubeRoot) => "cubeRootButton.AutomationName",
+        Command::Function(Func::TenToX) => "powerOf10Button.AutomationName",
+        Command::Function(Func::TwoToX) => "twoPowerXButton.AutomationName",
+        Command::Function(Func::EToX) => "powerOfEButton.AutomationName",
+        Command::Function(Func::Log) => "logBase10Button.AutomationName",
+        Command::Function(Func::Ln) => "logBaseEButton.AutomationName",
+        Command::Function(Func::Factorial) => "factorialButton.AutomationName",
+        Command::Function(Func::Abs) => "absButton.AutomationName",
+        Command::Function(Func::Floor) => "floorButton.AutomationName",
+        Command::Function(Func::Ceil) => "ceilButton.AutomationName",
+        Command::Function(Func::Dms) => "dmsButton.AutomationName",
+        Command::Function(Func::Degrees) => "degreesButton.AutomationName",
+        Command::Function(Func::Trig(_)) => unreachable!("named above"),
+        Command::Operator(Op::Power) => "powerButton.AutomationName",
+        Command::Operator(Op::Root) => "ySquareRootButton.AutomationName",
+        Command::Operator(Op::LogBase) => "logBaseY.AutomationName",
+        Command::Pi => "piButton.AutomationName",
+        Command::Euler => "eulerButton.AutomationName",
+        Command::Random => "randButton.AutomationName",
+        Command::Exponent => "expButton.AutomationName",
+        Command::ToggleNotation => "ftoeButton.AutomationName",
+        Command::Angle(Angle::Degrees) => "degButton.AutomationName",
+        Command::Angle(Angle::Radians) => "radButton.AutomationName",
+        Command::Angle(Angle::Gradians) => "gradButton.AutomationName",
         Command::MemoryClear => "ClearMemoryButton.AutomationName",
         Command::MemoryRecall => "MemRecall.AutomationName",
         Command::MemoryAdd => "MemPlus.AutomationName",
@@ -3106,8 +3230,11 @@ mod tests {
         let mut events = vec![key(Key::Num4, Modifiers::ALT)];
         assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Programmer));
 
-        // Scientific and Graphing don't exist yet.
         let mut events = vec![key(Key::Num2, Modifiers::ALT)];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Scientific));
+
+        // Graphing doesn't exist yet.
+        let mut events = vec![key(Key::Num3, Modifiers::ALT)];
         assert_eq!(take_mode_shortcut(&mut events), None);
         assert_eq!(events.len(), 1);
     }

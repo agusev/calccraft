@@ -41,15 +41,15 @@ own `NOT_STARTED` entry.
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Phase 1: Core Math Engine** | 8 | 8 | 0 | 0 | 0 |
 | **Phase 2: Standard Calculator Mode** | 7 | 7 | 0 | 0 | 0 |
-| **Phase 3: Scientific Calculator Mode** | 8 | 0 | 0 | 0 | 8 |
+| **Phase 3: Scientific Calculator Mode** | 9 | 9 | 0 | 0 | 0 |
 | **Phase 4: Programmer Calculator Mode** | 8 | 8 | 0 | 0 | 0 |
 | **Phase 5: Date Calculation** | 4 | 4 | 0 | 0 | 0 |
 | **Phase 6: Unit Conversion (13 categories)** | 14 | 13 | 0 | 0 | 1 |
 | **Phase 7: Graphing Calculator** | 6 | 0 | 0 | 0 | 6 |
 | **Phase 8: Application Shell, UX & Accessibility** | 11 | 10 | 0 | 1 | 0 |
-| **TOTAL** | **66** | **50** | **0** | **1** | **15** |
+| **TOTAL** | **67** | **59** | **0** | **1** | **7** |
 
-*Last updated: 2026-10-16 (CalcCraft 0.5.0)*
+*Last updated: 2026-10-16 (CalcCraft 0.6.0)*
 
 ---
 
@@ -69,8 +69,8 @@ graph TD
 1. **Phase 1: Core engine** (`src/engine.rs`): exact rational arithmetic, a port of the Windows
    engine with and without operator precedence, parentheses, memory, history. *Done.*
 2. **Phase 2: Standard mode** (`src/app.rs`): immediate execution calculator and its UI. *Done.*
-3. **Phase 3: Scientific mode**: its keypad and UI on top of the precedence engine, trigonometry,
-   powers, logarithms.
+3. **Phase 3: Scientific mode** (`src/engine/math.rs`, `src/app/scientific_view.rs`): the keypad and
+   UI on the precedence engine, trigonometry, powers, logarithms, factorial, F-E and `exp`. *Done.*
 4. **Phase 4: Programmer mode** (`src/engine/integer.rs`, `src/app/programmer_view.rs`): word
    sizes, radixes, bitwise logic, shifts, rotations, bit keypad. *Done.*
 5. **Phase 5: Date calculation** (`src/dates.rs`, `src/app/date_view.rs`). *Done.*
@@ -136,9 +136,9 @@ UI code and is covered by unit tests.*
   - Changing an operator to a tighter one after its left side was computed adds brackets:
     `1 + 2 −` changed to `×` becomes `(1 + 2) ×`.
   - History records the whole expression, and repeated `=` repeats the last operation done.
-- **Differences:** the Programmer mode uses it (with its integer mode, `FEAT-PROG-*`); the
-  Scientific mode (`FEAT-SCI-*`) will too. `^` and the Scientific `mod` come with `FEAT-SCI-001`
-  and `FEAT-SCI-008`.
+- **Differences:** the Scientific mode (`FEAT-SCI-*`) and the Programmer mode (with its integer
+  mode, `FEAT-PROG-*`) use it. `^`, `yroot` and `log base` bind tightest (`FEAT-SCI-001`), and
+  the Scientific `mod` ranks with `×` and `÷` (`FEAT-SCI-008`).
 
 #### `FEAT-CORE-004` Parentheses Evaluation Stack
 - **Status:** `[x] COMPLETED`
@@ -217,7 +217,9 @@ UI code and is covered by unit tests.*
   - `Invalid input` (square root of a negative number, or pasted text that isn't valid).
   - `Overflow` (decimal exponent beyond ±9999, in both directions).
 - **Acceptance Criteria:**
-  - In the error state only digits, `.`, `C`, `CE` and `⌫` work; pressing any of them leaves the error state.
+  - In the error state only digits, `C`, `CE`, `⌫` and `=` work; pressing any of them leaves the
+    error state (`=` does nothing else). The decimal point is disabled, as the number pad's
+    `ErrorLayout` does in Windows (checked in calc.exe).
   - The expression line shows what Windows shows: `1 ÷` after `=`, `8 ÷ 0 +` after an operator, `1/(0)`.
 
 ---
@@ -324,97 +326,181 @@ UI code and is covered by unit tests.*
   - Invalid clipboard text shows `Invalid input`, as in Windows.
   - Copy in the history menu copies the result as the list shows it (`1,236`).
   - The menu opens at the pointer; a click outside it or `Esc` closes it.
-- **Differences:** Windows also accepts numbers in e-notation (`1e5`); CalcCraft rejects them
-  until the engine has exponent entry (`FEAT-SCI-006`). The memory menu shows `MC`, `M+` and
-  `M−` as text, since CalcCraft doesn't ship the Calculator's own icon font.
+- **Also:** numbers in e-notation (`1e5`, `1.5e-3`) paste through `exp` (`FEAT-SCI-006`).
+- **Differences:** the memory menu shows `MC`, `M+` and `M−` as text, since CalcCraft doesn't
+  ship the Calculator's own icon font.
 
 ---
 
 ### Phase 3: Scientific Calculator Mode
-*Scientific operations, trigonometry and logarithms.*
+*Scientific operations, trigonometry and logarithms. Logic in `src/engine/math.rs` (the
+functions, after `ratpak`) and `src/engine.rs` (`Calculator::with_precedence()`), UI in
+`src/app/scientific_view.rs`. The behaviors the tests pin down are listed in AGENTS.md.*
 
-> **Rust notes for the whole phase:** `BigRational` has no `sin`, `ln` or real powers. Either
-> implement series (Taylor/AGM) at about 40 digits on top of `num-bigint`, or pick a
-> multi-precision crate that builds on Windows MSVC, and decide this before writing
-> `FEAT-SCI-001`. Keep `engine.rs` free of UI code and pin every behavior with a test.
-> The Scientific mode runs on `Calculator::with_precedence()`, which already has operator
-> precedence, parentheses (`open_parentheses` for the `(` counter) and the Scientific paste rules.
+> **Rust notes for the whole phase:** `BigRational` has no `sin`, `ln` or real powers. No
+> multi-precision crate was added: `math.rs` computes the series itself on `Float`, a binary
+> floating point number with a `num-bigint` mantissa of about 400 bits, and rounds every result
+> to 40 significant digits (`INTERNAL_DIGITS`), so exact results stay exact rationals
+> (`sin(30°)` is 0.5) and the 32 digits shown are those of the exact value. Windows'
+> `ratpak` domain checks are ported function by function.
 
 #### `FEAT-SCI-001` Expanded Powers and Roots
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-CORE-003`
-- **Windows ref:** `src/CalcManager/CEngine/scifunc.cpp`, `Ratpack/exp.cpp`
+- **Windows ref:** `src/CalcManager/CEngine/scifunc.cpp`, `scioper.cpp`, `Ratpack/exp.cpp` (`powrat`, `powratcomp`)
+- **Rust:** `src/engine/math.rs` (`power`, `root`, `exp`), `src/engine.rs` (`Op::Power`, `Op::Root`,
+  `Func::Square`, `Cube`, `SquareRoot`, `CubeRoot`, `TenToX`, `TwoToX`, `EToX`)
 - **Description:** $x^y$, $10^x$, $e^x$, $2^x$, $\sqrt[y]{x}$, $\sqrt[3]{x}$, $x^3$, $x^2$.
 - **Acceptance Criteria:**
-  - Accurate for positive, negative and fractional exponents.
-  - Invalid operations (an even root of a negative number) show `Invalid input`.
+  - Accurate for positive, negative and fractional exponents: integer powers are exact, and
+    exact roots are exact (`8 yroot 3` is 2, `27^(2/3)` is 9, `(−8)^(1/3)` is −2).
+  - Invalid operations (an even root of a negative number, 0 to a negative power, a result beyond
+    e^±100000) show `Invalid input`; the 0th root divides by zero.
+  - `xʸ`, `ʸ√x` and `logᵧx` bind tighter than `×` and `÷` (`NPrecedenceOfOp` 4).
+- **Differences:** none known.
 
 #### `FEAT-SCI-002` Trigonometric Functions & Angle Modes (DEG, RAD, GRAD)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-CORE-003`
-- **Windows ref:** `src/CalcManager/Ratpack/trans.cpp`
+- **Windows ref:** `src/CalcManager/Ratpack/trans.cpp`, `CEngine/scicomm.cpp` (`IsCurrentTooBigForTrig`),
+  `src/Calculator/Views/CalculatorScientificAngleButtons.xaml(.cs)`
+- **Rust:** `src/engine/math.rs` (`sin`, `cos`, `tan`, `sin_cos`, `Angle`), `src/engine.rs`
+  (`Func::Trig`, `Command::Angle`, `trig_function`), `src/app/scientific_view.rs` (`draw_angle_row`)
 - **Description:** `sin`, `cos`, `tan`, `csc`, `sec`, `cot`, with Degrees, Radians and Gradians.
 - **Acceptance Criteria:**
-  - $\sin(90^\circ) = 1$, $\sin(\pi/2 \text{ rad}) = 1$, $\sin(100 \text{ grad}) = 1$.
-  - Asymptotes such as $\tan(90^\circ)$ give `Invalid input`.
+  - $\sin(90^\circ) = 1$, $\sin(\pi/2 \text{ rad}) = 1$, $\sin(100 \text{ grad}) = 1$; degrees
+    and gradians are reduced exactly, and sines and cosines within 10^-32 of 0 are 0.
+  - Asymptotes such as $\tan(90^\circ)$ give `Invalid input`; `csc(0)` divides by zero; values
+    from 10^100 on are `Invalid input`.
+  - The expression line names the unit: `sin₀(30)`, `sinᵣ(1)`, `sin₉(100)`.
+  - The unit button cycles DEG → RAD → GRAD; `F4`, `F5` and `F3` pick radians, gradians and
+    degrees, as in Windows (checked in calc.exe).
+- **Differences:** angles in radians are reduced with as many digits of π as they need, so huge
+  arguments (`sin(10^22)`) are exact; in the error state the unit button clears the error and
+  switches (Windows shows the new unit but keeps the old one in its engine).
 
 #### `FEAT-SCI-003` Inverse and Hyperbolic Trigonometry (2nd & hyp)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-SCI-002`
-- **Windows ref:** `src/Calculator/Views/CalculatorScientificOperators.xaml`
+- **Windows ref:** `src/Calculator/Views/CalculatorScientificOperators.xaml(.cs)`, `Ratpack/itrans.cpp`,
+  `transh.cpp`, `itransh.cpp`, `CalculatorManager.cpp` (`CommandASIN` …)
+- **Rust:** `src/engine/math.rs` (`asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`,
+  `atanh`, `invert`), `src/engine.rs` (`Trig`, `TrigFunction`), `src/app/scientific_view.rs`
+  (the Trigonometry menu)
 - **Description:** `2nd` gives $\sin^{-1}$ … $\cot^{-1}$; `hyp` gives $\sinh$ … $\coth$; both give $\sinh^{-1}$ ….
 - **Acceptance Criteria:**
-  - Button labels and actions switch while `2nd` or `hyp` is on.
+  - The Trigonometry menu's labels and actions switch while `2nd` or `hyp` is on; a function
+    turns both off and closes the menu.
+  - Inverse results come in the angle unit (`sin⁻¹(0.5)` is 30 in degrees); `|x| > 1` is
+    `Invalid input` for `sin⁻¹`, `x < 1` for `cosh⁻¹`; `tanh⁻¹(1)` divides by zero.
+  - Keys: `S` `O` `T` `U` `I` `J`, inverse with `Shift`, hyperbolic with `Ctrl`, both with
+    `Ctrl+Shift`.
+- **Differences:** none known.
 
 #### `FEAT-SCI-004` Logarithms and Exponentials
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-CORE-003`
-- **Windows ref:** `src/CalcManager/Ratpack/logic.cpp`, `exp.cpp`
+- **Windows ref:** `src/CalcManager/Ratpack/exp.cpp` (`lograt`, `log10rat`, `exprat`), `CEngine/scioper.cpp` (`IDC_LOGBASEY`)
+- **Rust:** `src/engine/math.rs` (`ln`, `log10`, `log_base`, `exp`), `src/engine.rs` (`Func::Ln`,
+  `Func::Log`, `Func::EToX`, `Op::LogBase`)
 - **Description:** $\ln(x)$, $\log_{10}(x)$, $\log_y(x)$, $e^x$.
 - **Acceptance Criteria:**
-  - $\ln(e) = 1$, $\log_{10}(1000) = 3$.
-  - $x \le 0$ shows `Invalid input`.
+  - $\ln(e) = 1$, $\log_{10}(1000) = 3$, `8 log base 2 = 3`.
+  - $x \le 0$ shows `Invalid input`; `log base 1` divides by zero (and `1 log base 1` is
+    undefined).
+- **Differences:** none known.
 
 #### `FEAT-SCI-005` Mathematical Constants & Special Unary Functions
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-CORE-001`
-- **Windows ref:** `src/CalcManager/Ratpack/support.cpp`, `fact.cpp`
-- **Description:** $\pi$, $e$, factorial $n!$, absolute value $|x|$.
+- **Windows ref:** `src/CalcManager/CEngine/scicomm.cpp` (`IDC_PI`, `IDC_EULER`, `IDC_RAND`), `scifunc.cpp`,
+  `Ratpack/fact.cpp` (`factrat`)
+- **Rust:** `src/engine/math.rs` (`pi`, `euler`, `random`, `factorial`, `gamma_unit`, `floor`,
+  `ceil`), `src/engine.rs` (`Command::Pi`, `Euler`, `Random`, `constant`, `Func::Factorial`, `Abs`,
+  `Floor`, `Ceil`)
+- **Description:** $\pi$, $e$, `rand`, factorial $n!$, absolute value $|x|$, $\lfloor x \rfloor$, $\lceil x \rceil$.
 - **Acceptance Criteria:**
-  - Constants are entered with full internal precision.
-  - Factorial of non-integers follows Windows (gamma function) and of negative numbers shows `Invalid input`.
+  - Constants are entered with full internal precision (`3.1415926535897932384626433832795`),
+    and replace the typed number (`2π` is π).
+  - Factorial of non-integers follows Windows (gamma function: `0.5!` matches calc.exe in all
+    32 digits); negative integers show `Invalid input`, beyond 3249 or below −1000 `Overflow`.
+- **Differences:** `rand` takes its random bits from a small generator seeded by the clock and
+  the system, not from `mt19937`.
 
 #### `FEAT-SCI-006` Notation & Formatting Toggles (F-E, exp)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-CORE-001`
-- **Windows ref:** `src/Calculator.ViewModels/StandardCalculatorViewModel.cs`
+- **Windows ref:** `src/Calculator.ViewModels/StandardCalculatorViewModel.cs` (`IsFToEChecked`),
+  `CEngine/CalcInput.cpp` (`TryBeginExponent`), `Ratpack/conv.cpp` (`NumberToString`)
+- **Rust:** `src/engine.rs` (`Command::ToggleNotation`, `Command::Exponent`, `Exponent`,
+  `format_with`), `src/app/scientific_view.rs` (`draw_angle_row`)
 - **Description:** `F-E` toggles fixed and scientific notation; `exp` enters an exponent (`3.5e+4`).
 - **Acceptance Criteria:**
-  - Scientific notation uses the existing Windows format (`1.234e+18`), see `format_number` in `engine.rs`.
+  - Scientific notation uses Windows' format (`1.2345e+4`, `5.e+0`, `0.e+0`), on the display,
+    in the expression line and in the history; `C` and `CE` turn F-E off.
+  - `exp` adds a decimal point, takes up to 4 digits, `±` flips the exponent's sign and `⌫`
+    removes it; a number beyond Windows' 4-digit exponents is `Overflow`.
+  - Paste accepts e-notation in the Standard and Scientific modes (`1.5e-3`).
+- **Differences:** in the error state F-E clears the error and switches (Windows' button shows
+  the new state but its engine keeps the old one).
 
 #### `FEAT-SCI-007` DMS (Degrees, Minutes, Seconds) Converter
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P2`
 - **Depends On:** `FEAT-SCI-002`
-- **Windows ref:** `src/CalcManager/CEngine/scifunc.cpp`
-- **Description:** `dms` converts decimal degrees to D.MMSS; `deg` converts back.
+- **Windows ref:** `src/CalcManager/CEngine/scifunc.cpp` (`IDC_DMS`, `IDC_DEGREES`)
+- **Rust:** `src/engine/math.rs` (`dms`), `src/engine.rs` (`Func::Dms`, `Func::Degrees`)
+- **Description:** `→dms` converts decimal degrees to D.MMSS; `→deg` converts back.
 - **Acceptance Criteria:**
-  - $30.5^\circ \rightarrow 30.30$ ($30^\circ 30'$).
+  - $30.5^\circ \rightarrow 30.30$ ($30^\circ 30'$), and back.
+  - Like Windows, `→deg` after `=` hides the expression line, and it isn't a function to the
+    engine (a new number replaces it); checked in calc.exe.
+- **Differences:** none known.
 
 #### `FEAT-SCI-008` Modulo Operator (mod)
-- **Status:** `[ ] NOT_STARTED`
+- **Status:** `[x] COMPLETED`
 - **Priority:** `P1`
 - **Depends On:** `FEAT-CORE-003`
-- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`
+- **Windows ref:** `src/CalcManager/CEngine/scioper.cpp`, `Ratpack/logic.cpp` (`modrat`)
+- **Rust:** `src/engine/math.rs` (`modulo`), `src/engine.rs` (`Op::Mod` outside the integer mode)
 - **Description:** Binary remainder operator.
 - **Acceptance Criteria:**
-  - $10 \text{ mod } 3 = 1$; the sign of the result follows Windows for negative operands.
+  - $10 \text{ mod } 3 = 1$ (`10 Mod 3 =`); the result has the sign of the divisor
+    (`−10 mod 3` is 2, `10 mod −3` is −2), and `x mod 0` is x.
+- **Differences:** none known.
+
+#### `FEAT-SCI-009` Scientific Mode UI
+- **Status:** `[x] COMPLETED`
+- **Priority:** `P0`
+- **Depends On:** `FEAT-SCI-001`, `FEAT-SCI-002`
+- **Windows ref:** `src/Calculator/Views/Calculator.xaml` (`Scientific` state),
+  `CalculatorScientificOperators.xaml(.cs)`, `CalculatorScientificAngleButtons.xaml(.cs)`,
+  `CalculatorManager.cpp` (`SetScientificMode`), `Common/KeyboardShortcutManager.cs`
+- **Rust:** `src/app/scientific_view.rs`, `src/app.rs` (`Mode::Scientific`, `engine`, `set_mode`,
+  `Kind::Emphasized`, `draw_memory_row_enabled`, `layout_wrapped_right`), `tools/import-strings.ps1`
+- **Description:** The Scientific mode in the menu (`Alt+2`): display with 32 digits, the
+  angle unit and F-E, the memory row, the Trigonometry and Function menus and the 5 × 7 keys
+  with `2nd`, `π`, `e`, `C`/`CE`, `⌫`, `x²`, `1/x`, `|x|`, `exp`, `mod`, `√x`, parentheses with
+  their count, `n!`, `xʸ`, `10ˣ`, `log`, `ln`, `±` and the digits.
+- **Acceptance Criteria:**
+  - Sizes from `Calculator.xaml`'s star rows (results 26, 46 or 72 px, the 544 px trigger) and
+    the `Small`, `Medium` and `Large` states of the keys; compared side by side with calc.exe
+    at its minimum and a wide size.
+  - `2nd` swaps the first column (`x³`, `∛x`, `ʸ√x`, `2ˣ`, `logᵧx`, `eˣ`) with the accent
+    hover, and using one turns it off.
+  - Its own history, memory shared with the other modes; the history and memory flyouts cover
+    the keys only, and the lists wrap 32-digit results like Windows'.
+  - Windows' keyboard shortcuts, screen reader names in 60 languages (59 new strings), both
+    themes.
+- **Differences:** the key labels and the menus' icons are Segoe UI text and drawings, since
+  Windows takes them from the Calculator's own icon font. The flyouts don't dim the rows above
+  them (Windows lays a smoke layer over them).
 
 ---
 
@@ -861,12 +947,13 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
   - Every new mode adds itself to `Mode` and to the menu.
 - **Differences:** Windows lists 18 modes: Standard, Scientific, Graphing, Programmer, Date
   calculation, and 13 converters. CalcCraft lists only the implemented modes (Standard,
-  Programmer, Date calculation and 12 converters, without Currency). Windows draws the Programmer
-  icon and six converter icons (Volume, Weight, Temperature, Speed, Data, Angle) from the
-  Calculator's own icon font, whose license limits it to Windows; CalcCraft uses similar Segoe
-  Fluent Icons glyphs (`</>` for Programmer). As in Windows, switching between the Standard and
-  Programmer modes starts the other one over, and they share the memory. The mode hotkeys are
-  `FEAT-SHELL-010`.
+  Scientific, Programmer, Date calculation and 12 converters, without Currency). Windows draws
+  the Programmer icon and six converter icons (Volume, Weight, Temperature, Speed, Data, Angle)
+  from the Calculator's own icon font, whose license limits it to Windows; CalcCraft uses similar
+  Segoe Fluent Icons glyphs (`</>` for Programmer). The Scientific mode's beaker is Windows' own
+  glyph, which Segoe Fluent Icons has. As in Windows, switching between the Standard, Scientific
+  and Programmer modes starts the other one over, and they share the memory. The mode hotkeys
+  are `FEAT-SHELL-010`.
 
 #### `FEAT-SHELL-002` Adaptive Layouts (docked panels)
 - **Status:** `[x] COMPLETED`
@@ -1044,8 +1131,8 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
 - **Description:** `Alt+1` Standard, `Alt+2` Scientific, `Alt+3` Graphing, `Alt+4` Programmer,
   `Alt+5` Date calculation, and `Ctrl+E` Date calculation too. The converters have none.
 - **Acceptance Criteria:**
-  - Keys of modes that don't exist yet do nothing; `Alt+1`, `Alt+4`, `Alt+5` and `Ctrl+E` work
-    today.
+  - Keys of modes that don't exist yet (`Alt+3`, Graphing) do nothing; `Alt+1`, `Alt+2`,
+    `Alt+4`, `Alt+5` and `Ctrl+E` work today.
   - As in Windows, they do nothing in keep-on-top mode, on the Settings page or with `AltGr`
     (`Ctrl+Alt`), and they work with a menu or flyout open. The digit isn't typed.
 - **Differences:** Windows switches when the key is released, CalcCraft when it's pressed.
@@ -1095,3 +1182,4 @@ Windows source in `../win-calculator`.
 | 2026-10-15 | Claude Code | `FEAT-SHELL-002`, `-005`, `-006`, `-007`, `-010`, `-011` | Finished Phase 8: the docked history and memory panel and Windows' 320 × 500 minimum size; `Alt+1`, `Alt+5` and `Ctrl+E`; keyboard focus with focus visuals and screen reader names for every control (`src/app/access.rs`); the Windows Calculator's translations in 60 languages (`tools/import-strings.ps1`, `locales/`) and the regional number and date formats (`src/locale.rs`, `src/app/region.rs`). Split right-to-left and complex scripts into `FEAT-SHELL-011`, blocked by egui's text layout |
 | 2026-10-15 | Claude Code | `FEAT-SHELL-007`, `FEAT-SHELL-008` | Added the Language and Regional format settings: drop-down cards in Appearance that switch the language and the formats at runtime and save them, with names in their own scripts, type-ahead, and CalcCraft's own translations of their labels (`locales/calccraft.txt`) |
 | 2026-10-16 | Claude Code | `FEAT-PROG-001`–`FEAT-PROG-008` | Finished Phase 4 (CalcCraft 0.5.0): Windows' integer mode of `CCalcEngine` in `src/engine/integer.rs` and `Calculator::programmer()` (radixes, word sizes, bitwise operators, shifts, rotations, bit toggling, `DisplayNum` truncation, Programmer paste rules), and the Programmer mode's UI in `src/app/programmer_view.rs` after `Calculator.xaml` and the `CalculatorProgrammer*.xaml` views; added `FEAT-PROG-008` for the mode's UI. Updated `FEAT-CORE-003`, `FEAT-CORE-004`, `FEAT-SHELL-001`, `-002` and `-010`; checked side by side with the Windows Calculator |
+| 2026-10-16 | Claude Code | `FEAT-SCI-001`–`FEAT-SCI-009` | Finished Phase 3 (CalcCraft 0.6.0): the Scientific mode. `src/engine/math.rs` computes powers, roots, logarithms, trigonometric and hyperbolic functions and the gamma function on `num-bigint` floats with `ratpak`'s domain rules; `src/engine.rs` adds `^`, `yroot`, `log base` and the Scientific `mod`, the functions with Windows' expression names, π, e and rand, `exp` entry, F-E, angle units and 32 digits; `src/app/scientific_view.rs` draws `CalculatorScientificOperators.xaml` with `2nd` and the Trigonometry and Function menus. Added `FEAT-SCI-009` for the mode's UI. Also fixed the error state (`.` disabled, `=` enabled, as calc.exe does) and e-notation paste, and the history and memory lists wrap long numbers. Updated `FEAT-CORE-003`, `-008`, `FEAT-STD-007`, `FEAT-SHELL-001` and `-010`; checked side by side with the Windows Calculator |

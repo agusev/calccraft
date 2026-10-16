@@ -13,9 +13,11 @@
 //! The names of the Windows fields are given in the comments.
 //!
 //! `Calculator::programmer()` is Windows' integer mode for the Programmer mode: the same
-//! engine with precedence, a radix and a word size (see `integer.rs`).
+//! engine with precedence, a radix and a word size (see `integer.rs`). The Scientific
+//! mode's functions are in `math.rs`.
 
 mod integer;
+mod math;
 
 use std::cmp::Ordering;
 
@@ -25,11 +27,17 @@ use num_traits::{Signed, ToPrimitive, Zero};
 
 use integer::IntegerMode;
 pub use integer::{Radix, WordSize};
+pub use math::Angle;
 
 pub type Number = BigRational;
 
-/// How many digits can be typed and how many significant digits the display shows.
+/// How many digits can be typed and how many significant digits the display shows in
+/// the Standard mode (`StandardModePrecision`).
 const MAX_DIGITS: i64 = 16;
+/// The same in the Scientific mode (`ScientificModePrecision`).
+const SCIENTIFIC_DIGITS: i64 = 32;
+/// The longest exponent that can be typed after `exp` (`C_EXP_MAX_DIGITS`).
+const MAX_EXPONENT_DIGITS: usize = 4;
 /// How many zeros after the decimal point plain notation allows when the number
 /// does not fit completely (0.0033… stays plain, 0.00033… becomes 3.3…e-4).
 const MAX_ZEROS_AFTER_DECIMAL: i64 = 2;
@@ -65,6 +73,11 @@ pub enum Op {
     LeftShift,
     RightShift,
     RightShiftLogical,
+    /// The Scientific mode's `xʸ`, `ʸ√x` (the left operand's yth root) and `logᵧx` (the
+    /// left operand's logarithm to the base of the right one).
+    Power,
+    Root,
+    LogBase,
 }
 
 impl Op {
@@ -86,6 +99,9 @@ impl Op {
             Op::Nor => "NOR",
             Op::LeftShift => "Lsh",
             Op::RightShift | Op::RightShiftLogical => "Rsh",
+            Op::Power => "^",
+            Op::Root => "yroot",
+            Op::LogBase => "log base",
         }
     }
 
@@ -102,7 +118,28 @@ impl Op {
             | Op::LeftShift
             | Op::RightShift
             | Op::RightShiftLogical => 3,
+            Op::Power | Op::Root | Op::LogBase => 4,
         }
+    }
+
+    /// The Programmer mode's operators, which the other modes don't have.
+    fn is_integer(self) -> bool {
+        matches!(
+            self,
+            Op::And
+                | Op::Or
+                | Op::Xor
+                | Op::Nand
+                | Op::Nor
+                | Op::LeftShift
+                | Op::RightShift
+                | Op::RightShiftLogical
+        )
+    }
+
+    /// The Scientific mode's operators.
+    fn is_scientific(self) -> bool {
+        matches!(self, Op::Power | Op::Root | Op::LogBase)
     }
 }
 
@@ -125,12 +162,72 @@ pub enum Func {
     RotateRight,
     RotateLeftCarry,
     RotateRightCarry,
+    /// The Scientific mode's functions: `x³`, `∛x`, `10ˣ`, `2ˣ`, `eˣ`, `log`, `ln`, `n!`,
+    /// `|x|`, `⌊x⌋`, `⌈x⌉`, `→dms`, `→deg`, and the trigonometric functions.
+    Cube,
+    CubeRoot,
+    TenToX,
+    TwoToX,
+    EToX,
+    Log,
+    Ln,
+    Factorial,
+    Abs,
+    Floor,
+    Ceil,
+    Dms,
+    Degrees,
+    Trig(Trig),
+}
+
+/// A trigonometric function, or its inverse (`2nd` in the Trigonometry menu), or a
+/// hyperbolic one (`hyp`), or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Trig {
+    pub function: TrigFunction,
+    pub inverse: bool,
+    pub hyperbolic: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrigFunction {
+    Sin,
+    Cos,
+    Tan,
+    Sec,
+    Csc,
+    Cot,
+}
+
+impl TrigFunction {
+    pub const ALL: [TrigFunction; 6] = [
+        TrigFunction::Sin,
+        TrigFunction::Cos,
+        TrigFunction::Tan,
+        TrigFunction::Sec,
+        TrigFunction::Csc,
+        TrigFunction::Cot,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TrigFunction::Sin => "sin",
+            TrigFunction::Cos => "cos",
+            TrigFunction::Tan => "tan",
+            TrigFunction::Sec => "sec",
+            TrigFunction::Csc => "csc",
+            TrigFunction::Cot => "cot",
+        }
+    }
 }
 
 impl Func {
-    /// The function's name in the expression line, as in `sqr(5)`.
-    fn name(self) -> &'static str {
-        match self {
+    /// The function's name in the expression line, as in `sqr(5)`: Windows' engine
+    /// strings (`OpCodeToUnaryString`), which aren't translated. The trigonometric
+    /// functions show the angle unit as a subscript: `sin₀` in degrees, `sinᵣ` in
+    /// radians and `sin₉` in gradians.
+    fn name(self, angle: Angle) -> String {
+        let name = match self {
             Func::Reciprocal => "1/",
             Func::Square => "sqr",
             Func::SquareRoot => "√",
@@ -138,7 +235,37 @@ impl Func {
             Func::Not => "NOT",
             Func::RotateLeft | Func::RotateLeftCarry => "RoL",
             Func::RotateRight | Func::RotateRightCarry => "RoR",
-        }
+            Func::Cube => "cube",
+            Func::CubeRoot => "cuberoot",
+            Func::TenToX => "10^",
+            Func::TwoToX => "2^",
+            Func::EToX => "e^",
+            Func::Log => "log",
+            Func::Ln => "ln",
+            Func::Factorial => "fact",
+            Func::Abs => "abs",
+            Func::Floor => "floor",
+            Func::Ceil => "ceil",
+            Func::Dms => "dms",
+            Func::Degrees => "degrees",
+            Func::Trig(trig) => {
+                let mut name = trig.function.label().to_string();
+                if trig.hyperbolic {
+                    name.push('h');
+                } else {
+                    name.push(match angle {
+                        Angle::Degrees => '₀',
+                        Angle::Radians => 'ᵣ',
+                        Angle::Gradians => '₉',
+                    });
+                }
+                if trig.inverse {
+                    name.push_str("⁻¹");
+                }
+                return name;
+            }
+        };
+        name.to_string()
     }
 
     /// Whether the function exists only in the Programmer mode.
@@ -153,16 +280,79 @@ impl Func {
         )
     }
 
-    fn apply(self, v: &Number) -> Result<Number, CalcError> {
-        match self {
-            Func::Reciprocal if v.is_zero() => Err(CalcError::DivideByZero),
-            Func::Reciprocal => normalize(v.recip()),
-            Func::Square => normalize(v * v),
-            Func::SquareRoot => sqrt(v),
-            Func::Negate => Ok(-v),
+    /// Whether the function exists only in the Scientific mode.
+    fn is_scientific(self) -> bool {
+        !self.is_integer()
+            && !matches!(
+                self,
+                Func::Reciprocal | Func::Square | Func::SquareRoot | Func::Negate
+            )
+    }
+
+    fn apply(self, v: &Number, angle: Angle) -> Result<Number, CalcError> {
+        let ten = || Number::from_integer(10.into());
+        let two = || Number::from_integer(2.into());
+        let result = match self {
+            Func::Reciprocal if v.is_zero() => return Err(CalcError::DivideByZero),
+            Func::Reciprocal => v.recip(),
+            Func::Square => v * v,
+            Func::SquareRoot => return sqrt(v),
+            Func::Negate => -v,
+            Func::Cube => v * v * v,
+            Func::CubeRoot => math::root(v, &Number::from_integer(3.into()))?,
+            Func::TenToX => math::power(&ten(), v)?,
+            Func::TwoToX => math::power(&two(), v)?,
+            Func::EToX => math::exp(v)?,
+            Func::Log => math::log10(v)?,
+            Func::Ln => math::ln(v)?,
+            Func::Factorial => math::factorial(v)?,
+            Func::Abs => v.abs(),
+            Func::Floor => math::floor(v),
+            Func::Ceil => math::ceil(v),
+            Func::Dms => math::dms(v, false),
+            Func::Degrees => math::dms(v, true),
+            Func::Trig(trig) => trig_function(trig, v, angle)?,
             // The integer functions need the word size; `Calculator::unary` does them.
-            _ => Ok(v.clone()),
-        }
+            _ => v.clone(),
+        };
+        normalize(result)
+    }
+}
+
+/// A trigonometric function as `SciCalcFunctions` computes it: the reciprocal ones as
+/// 1/cos, 1/sin and 1/tan, and their inverses from the reciprocal of the value.
+fn trig_function(trig: Trig, v: &Number, angle: Angle) -> Result<Number, CalcError> {
+    use TrigFunction::*;
+    let reciprocal = matches!(trig.function, Sec | Csc | Cot);
+    let base = match trig.function {
+        Sin | Csc => Sin,
+        Cos | Sec => Cos,
+        Tan | Cot => Tan,
+    };
+    let argument = if reciprocal && trig.inverse {
+        math::invert(v)?
+    } else {
+        v.clone()
+    };
+    let result = match (base, trig.inverse, trig.hyperbolic) {
+        (Sin, false, false) => math::sin(&argument, angle)?,
+        (Cos, false, false) => math::cos(&argument, angle)?,
+        (Tan, false, false) => math::tan(&argument, angle)?,
+        (Sin, true, false) => math::asin(&argument, angle)?,
+        (Cos, true, false) => math::acos(&argument, angle)?,
+        (Tan, true, false) => math::atan(&argument, angle)?,
+        (Sin, false, true) => math::sinh(&argument)?,
+        (Cos, false, true) => math::cosh(&argument)?,
+        (Tan, false, true) => math::tanh(&argument)?,
+        (Sin, true, true) => math::asinh(&argument)?,
+        (Cos, true, true) => math::acosh(&argument)?,
+        (_, true, true) => math::atanh(&argument)?,
+        _ => unreachable!("the reciprocal functions map to sin, cos and tan"),
+    };
+    if reciprocal && !trig.inverse {
+        math::invert(&result)
+    } else {
+        Ok(result)
     }
 }
 
@@ -191,6 +381,18 @@ pub enum Command {
     /// The Programmer mode's radix (`IDM_HEX` …) and word size (`IDM_QWORD` …).
     Radix(Radix),
     WordSize(WordSize),
+    /// The Scientific mode's constants π and e and a random number (`IDC_PI`,
+    /// `IDC_EULER`, `IDC_RAND`).
+    Pi,
+    Euler,
+    Random,
+    /// `exp`: the typed number goes on with an exponent (`IDC_EXP`). Paste uses it in the
+    /// Standard mode too.
+    Exponent,
+    /// `F-E`: scientific notation on or off (`IDC_FE`).
+    ToggleNotation,
+    /// DEG, RAD or GRAD (`IDM_DEG` …).
+    Angle(Angle),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,6 +433,9 @@ impl CalcError {
 pub struct HistoryEntry {
     pub expression: String,
     pub result: Number,
+    /// The result as the display showed it (Windows keeps this string): with the mode's
+    /// digits and notation, and thousands separators.
+    pub text: String,
 }
 
 /// The kind of the previous command (`m_nLastCom`); many decisions depend on it.
@@ -251,6 +456,10 @@ enum Key {
     ClearEntry,
     Recall,
     BitToggle,
+    /// π, e and a random number, which are like typing a number.
+    Constant,
+    /// `→deg`, which Windows' `IsUnaryOpCode` doesn't count as a function.
+    Degrees,
 }
 
 impl Key {
@@ -260,6 +469,7 @@ impl Key {
             Command::Decimal => Key::Point,
             Command::Operator(op) => Key::Operator(op),
             Command::Function(Func::Negate) => Key::Sign,
+            Command::Function(Func::Degrees) => Key::Degrees,
             Command::Function(_) | Command::Percent => Key::Unary,
             Command::Equals => Key::Equals,
             Command::ClearEntry => Key::ClearEntry,
@@ -268,6 +478,7 @@ impl Key {
             Command::CloseParen => Key::CloseParen,
             Command::MemoryRecall => Key::Recall,
             Command::ToggleBit(_) => Key::BitToggle,
+            Command::Pi | Command::Euler | Command::Random => Key::Constant,
             // Settings, not commands (`IsGuiSettingOpCode`).
             Command::Backspace
             | Command::MemoryClear
@@ -275,18 +486,30 @@ impl Key {
             | Command::MemorySubtract
             | Command::MemoryStore
             | Command::Radix(_)
-            | Command::WordSize(_) => return None,
+            | Command::WordSize(_)
+            | Command::Exponent
+            | Command::ToggleNotation
+            | Command::Angle(_) => return None,
         })
     }
 }
 
-/// The number being typed (`CalcInput`, without exponents).
+/// The exponent typed after `exp`.
+#[derive(Clone, Debug, Default)]
+struct Exponent {
+    negative: bool,
+    digits: String,
+}
+
+/// The number being typed (`CalcInput`).
 #[derive(Clone, Debug, Default)]
 struct Input {
     negative: bool,
     /// Digits (`0`–`9`, and `A`–`F` in the Programmer mode) and at most one decimal
     /// point; empty means 0.
     digits: String,
+    /// The exponent, once `exp` was pressed (`m_hasExponent`).
+    exponent: Option<Exponent>,
 }
 
 impl Input {
@@ -294,10 +517,21 @@ impl Input {
         *self = Self::default();
     }
 
-    /// Adds a digit unless the limit is reached: 16 digits, or in the Programmer mode as
-    /// many as the word holds. A leading zero is never stored, and `0.` doesn't count
-    /// its zero against the limit.
-    fn try_add_digit(&mut self, digit: u8, integer: Option<&IntegerMode>) -> bool {
+    /// Adds a digit unless the limit is reached: `max` digits (16 in the Standard mode and
+    /// 32 in the Scientific mode), or in the Programmer mode as many as the word holds,
+    /// or 4 in the exponent. A leading zero is never stored, and `0.` doesn't count its
+    /// zero against the limit.
+    fn try_add_digit(&mut self, digit: u8, integer: Option<&IntegerMode>, max: usize) -> bool {
+        if let Some(exponent) = &mut self.exponent {
+            if exponent.digits.is_empty() && digit == 0 {
+                return true;
+            }
+            if exponent.digits.len() >= MAX_EXPONENT_DIGITS {
+                return false;
+            }
+            exponent.digits.push(char::from(b'0' + digit));
+            return true;
+        }
         if let Some(mode) = integer {
             if self.digits.is_empty() && digit == 0 {
                 return true;
@@ -311,7 +545,7 @@ impl Input {
             self.digits.push(c);
             return true;
         }
-        let mut max = MAX_DIGITS as usize;
+        let mut max = max;
         if self.digits.contains('.') {
             max += 1;
         }
@@ -330,7 +564,7 @@ impl Input {
     }
 
     fn try_add_point(&mut self) -> bool {
-        if self.digits.contains('.') {
+        if self.digits.contains('.') || self.exponent.is_some() {
             return false;
         }
         if self.digits.is_empty() {
@@ -340,17 +574,52 @@ impl Input {
         true
     }
 
-    /// Flips the sign; an empty input (0) stays positive. In the Programmer mode a
-    /// negative number that wouldn't fit as a positive one keeps its sign.
-    fn toggle_sign(&mut self, integer: Option<&IntegerMode>) -> bool {
-        if integer.is_some_and(|mode| !mode.sign_toggles(&self.digits, self.negative)) {
+    /// Starts the exponent, adding a decimal point first if there is none, as Windows
+    /// does for compatibility (`5` becomes `5.e+0`).
+    fn try_begin_exponent(&mut self) -> bool {
+        self.try_add_point();
+        if self.exponent.is_some() {
             return false;
         }
-        self.negative = !self.digits.is_empty() && !self.negative;
+        self.exponent = Some(Exponent::default());
         true
     }
 
+    /// Flips the sign, of the exponent once there is one; an empty input (0) stays
+    /// positive. In the Programmer mode a negative number that wouldn't fit as a
+    /// positive one keeps its sign.
+    fn toggle_sign(&mut self, integer: Option<&IntegerMode>) -> bool {
+        if self.digits.is_empty() {
+            self.negative = false;
+            if let Some(exponent) = &mut self.exponent {
+                exponent.negative = false;
+            }
+            return true;
+        }
+        if let Some(exponent) = &mut self.exponent {
+            exponent.negative = !exponent.negative;
+            return true;
+        }
+        if integer.is_some_and(|mode| !mode.sign_toggles(&self.digits, self.negative)) {
+            return false;
+        }
+        self.negative = !self.negative;
+        true
+    }
+
+    /// Removes the last digit: of the exponent, then the exponent itself (its sign goes
+    /// with its last digit), then the digits of the number.
     fn backspace(&mut self) {
+        if let Some(exponent) = &mut self.exponent {
+            if exponent.digits.pop().is_some() {
+                if exponent.digits.is_empty() {
+                    exponent.negative = false;
+                }
+            } else {
+                self.exponent = None;
+            }
+            return;
+        }
         self.digits.pop();
         if self.digits == "0" {
             self.digits.pop();
@@ -360,6 +629,12 @@ impl Input {
         }
     }
 
+    /// Whether nothing has been typed (`CalcInput::IsEmpty`).
+    fn is_empty(&self) -> bool {
+        self.digits.is_empty() && self.exponent.is_none()
+    }
+
+    /// The typed number as Windows writes it: `-12.5`, or with an exponent `1.5e+3`.
     fn text(&self) -> String {
         let sign = if self.negative { "-" } else { "" };
         let digits = if self.digits.is_empty() {
@@ -367,7 +642,22 @@ impl Input {
         } else {
             &self.digits
         };
-        format!("{sign}{digits}")
+        format!("{sign}{digits}{}", self.exponent_text())
+    }
+
+    /// `e+3`, `e-12` or `e+0` after `exp`, with the decimal point it needs.
+    fn exponent_text(&self) -> String {
+        let Some(exponent) = &self.exponent else {
+            return String::new();
+        };
+        let point = if self.digits.contains('.') { "" } else { "." };
+        let sign = if exponent.negative { '-' } else { '+' };
+        let digits = if exponent.digits.is_empty() {
+            "0"
+        } else {
+            &exponent.digits
+        };
+        format!("{point}e{sign}{digits}")
     }
 
     /// The typed number's value, in the Programmer mode's radix (`CalcInput::ToRational`).
@@ -385,15 +675,17 @@ impl Input {
 
     /// The input with thousands separators: `-1234.50` → `-1,234.50`.
     fn display(&self) -> String {
-        let text = self.text();
-        let (sign, unsigned) = match text.strip_prefix('-') {
-            Some(rest) => ("-", rest),
-            None => ("", text.as_str()),
+        let sign = if self.negative { "-" } else { "" };
+        let unsigned = if self.digits.is_empty() {
+            "0"
+        } else {
+            &self.digits
         };
-        match unsigned.split_once('.') {
+        let number = match unsigned.split_once('.') {
             Some((int, frac)) => format!("{sign}{}.{frac}", group_thousands(int)),
             None => format!("{sign}{}", group_thousands(unsigned)),
-        }
+        };
+        format!("{number}{}", self.exponent_text())
     }
 }
 
@@ -557,6 +849,13 @@ pub struct Calculator {
     precedence: bool,
     /// The Programmer mode's integer mode (`m_fIntegerMode`) with its radix and word size.
     integer: Option<IntegerMode>,
+    /// How many digits can be typed and the display shows (`m_precision`): 16, or 32 in
+    /// the Scientific mode.
+    digits: i64,
+    /// The trigonometric functions' unit (`m_angletype`).
+    angle: Angle,
+    /// `F-E`: numbers are written in scientific notation (`m_nFE`).
+    notation: bool,
     input: Input,
     /// A number is being typed into `input` (`m_bRecord`).
     record: bool,
@@ -589,6 +888,9 @@ impl Default for Calculator {
         Self {
             precedence: false,
             integer: None,
+            digits: MAX_DIGITS,
+            angle: Angle::Degrees,
+            notation: false,
             input: Input::default(),
             record: true,
             current: Number::zero(),
@@ -612,13 +914,29 @@ impl Default for Calculator {
 }
 
 impl Calculator {
-    /// An engine with operator precedence and parentheses, for the Scientific mode.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The Scientific mode's engine: operator precedence, parentheses, 32 digits and the
+    /// scientific functions (`SetScientificMode`).
     pub fn with_precedence() -> Self {
         Self {
             precedence: true,
+            digits: SCIENTIFIC_DIGITS,
             ..Self::default()
         }
+    }
+
+    /// Whether this is the Scientific mode's engine.
+    fn scientific(&self) -> bool {
+        self.precedence && self.integer.is_none()
+    }
+
+    /// The trigonometric functions' unit.
+    pub fn angle(&self) -> Angle {
+        self.angle
+    }
+
+    /// Whether `F-E` is on.
+    pub fn notation(&self) -> bool {
+        self.notation
     }
 
     /// The Programmer mode's engine: precedence, parentheses and integer mode, starting
@@ -655,7 +973,7 @@ impl Calculator {
         if self.record {
             self.input.display()
         } else {
-            format_number(&self.current)
+            self.format_value(&self.current)
         }
     }
 
@@ -708,15 +1026,15 @@ impl Calculator {
     /// Whether nothing has been typed and the display shows 0, when the Programmer
     /// mode's keypad shows `C` instead of `CE` (`CCalcEngine::IsInputEmpty`).
     pub fn is_input_empty(&self) -> bool {
-        self.input.digits.is_empty() && (self.record || self.number_text() == "0")
+        self.input.is_empty() && (self.record || self.number_text() == "0")
     }
 
-    /// A value as the memory list shows it: like the display, in the Programmer mode in
-    /// its radix (without the binary padding).
+    /// A value as the display and the memory list show it: with this mode's digits and
+    /// notation, in the Programmer mode in its radix (without the binary padding).
     pub fn format_value(&self, v: &Number) -> String {
         match &self.integer {
             Some(mode) => integer::group(&mode.format(v, mode.radix), mode.radix),
-            None => format_number(v),
+            None => format_with(v, true, self.digits, self.notation),
         }
     }
 
@@ -735,7 +1053,6 @@ impl Calculator {
     }
 
     /// How many parentheses are open (the `(` counter of the Scientific mode).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn open_parentheses(&self) -> usize {
         self.paren_stack.len()
     }
@@ -757,7 +1074,15 @@ impl Calculator {
             // error state, as in `CalculatorProgrammerRadixOperators.xaml`.
             match command {
                 Command::Digit(digit) => return u32::from(digit) < mode.radix.base(),
-                Command::Decimal | Command::Percent => return false,
+                Command::Decimal
+                | Command::Percent
+                | Command::Pi
+                | Command::Euler
+                | Command::Random
+                | Command::Exponent
+                | Command::ToggleNotation
+                | Command::Angle(_) => return false,
+                Command::Operator(op) if op.is_scientific() => return false,
                 Command::Function(func) if !func.is_integer() && func != Func::Negate => {
                     return false;
                 }
@@ -766,26 +1091,41 @@ impl Calculator {
                 _ => {}
             }
         } else {
-            // The Programmer mode's keys don't exist elsewhere.
-            let programmer_only = match command {
+            // The Programmer mode's keys don't exist elsewhere, nor the Scientific mode's
+            // in the Standard mode (but for `exp`, which paste uses).
+            let scientific = self.scientific();
+            let other_mode = match command {
                 Command::ToggleBit(_) | Command::Radix(_) | Command::WordSize(_) => true,
                 Command::Digit(digit) => digit > 9,
                 Command::Operator(op) => {
-                    !matches!(op, Op::Add | Op::Subtract | Op::Multiply | Op::Divide)
+                    op.is_integer() || (!scientific && (op.is_scientific() || op == Op::Mod))
                 }
-                Command::Function(func) => func.is_integer(),
+                Command::Function(func) => {
+                    func.is_integer() || (!scientific && func.is_scientific())
+                }
+                Command::Pi
+                | Command::Euler
+                | Command::Random
+                | Command::ToggleNotation
+                | Command::Angle(_) => !scientific,
                 _ => false,
             };
-            if programmer_only {
+            if other_mode {
                 return false;
             }
         }
         match command {
+            // In the error state the number pad's `ErrorLayout` disables the decimal point,
+            // and `=` stays enabled (it clears the error). The Scientific mode's unit and F-E
+            // buttons stay enabled too: Windows sends their control to visual states that
+            // don't exist (`ErrorFlyout`).
             Command::Digit(_)
-            | Command::Decimal
             | Command::Clear
             | Command::ClearEntry
-            | Command::Backspace => true,
+            | Command::Backspace
+            | Command::Equals
+            | Command::ToggleNotation
+            | Command::Angle(_) => true,
             Command::MemoryClear | Command::MemoryRecall => {
                 self.error.is_none() && !self.memory.is_empty()
             }
@@ -813,14 +1153,25 @@ impl Calculator {
         if self.error.is_some() {
             // Windows' view model clears the error first; only digits and the
             // decimal point (and in the Programmer mode a bit or a new radix) then
-            // go on (`IsRecoverableCommand`, `SwitchProgrammerModeBase`).
+            // go on (`IsRecoverableCommand`, `SwitchProgrammerModeBase`). The unit and
+            // F-E buttons change what they show in Windows but not the engine; here
+            // they apply, so the two agree.
             self.process(Command::Clear);
             if !matches!(
                 command,
-                Command::Digit(_) | Command::Decimal | Command::ToggleBit(_) | Command::Radix(_)
+                Command::Digit(_)
+                    | Command::Decimal
+                    | Command::ToggleBit(_)
+                    | Command::Radix(_)
+                    | Command::ToggleNotation
+                    | Command::Angle(_)
             ) {
                 return;
             }
+        } else if self.notation && matches!(command, Command::Clear | Command::ClearEntry) {
+            // The view model turns F-E off for C and CE (`IsFToEChecked = false`), and
+            // unchecking its button sends `IDC_FE` before the clear.
+            self.process(Command::ToggleNotation);
         }
         match command {
             Command::MemoryStore => self.memory_store(),
@@ -837,6 +1188,8 @@ impl Calculator {
 
     /// One command through the engine (`ProcessCommandWorker`).
     fn process(&mut self, command: Command) {
+        // When `begin` finds the typed number too large (`99.e+9999`), Windows goes on with
+        // the command all the same: `99 exp 9999 +` shows `Overflow` and `9.9e+10000 +`.
         self.begin(command);
         match command {
             Command::Digit(digit) => self.digit(digit),
@@ -858,6 +1211,18 @@ impl Calculator {
             Command::ToggleBit(bit) => self.toggle_bit(bit),
             Command::Radix(radix) => self.set_radix(radix),
             Command::WordSize(word) => self.set_word_size(word),
+            Command::Pi => self.constant(math::pi()),
+            Command::Euler => self.constant(math::euler()),
+            Command::Random => self.constant(math::random()),
+            // `exp` works only while a number is typed; otherwise it's ignored (a setting,
+            // so there is no command to forget).
+            Command::Exponent => {
+                if self.record && self.integer.is_none() {
+                    self.input.try_begin_exponent();
+                }
+            }
+            Command::ToggleNotation => self.notation = !self.notation,
+            Command::Angle(angle) => self.angle = angle,
             // Only the steps in `begin` (finishing the typed number) apply here.
             Command::MemoryClear
             | Command::MemoryRecall
@@ -892,6 +1257,11 @@ impl Calculator {
                 | Command::ToggleBit(_)
                 | Command::Radix(_)
                 | Command::WordSize(_)
+                | Command::Pi
+                | Command::Euler
+                | Command::Random
+                | Command::ToggleNotation
+                | Command::Angle(_)
         ) || matches!(command, Command::Function(func) if func != Func::Negate)
             // `±` outside decimal works on the finished number.
             || (command == Command::Function(Func::Negate)
@@ -901,6 +1271,13 @@ impl Calculator {
                 self.record = false;
                 self.current = self.input.value(self.integer.as_ref());
                 self.display_num();
+                // A typed exponent can make the number too large for the display, which
+                // Windows' `DisplayNum` reports as an overflow.
+                if self.integer.is_none()
+                    && let Err(error) = normalize(self.current.clone())
+                {
+                    self.display_error(error);
+                }
             }
         } else if matches!(command, Command::Digit(_) | Command::Decimal) {
             self.record = true;
@@ -928,7 +1305,8 @@ impl Calculator {
     }
 
     fn digit(&mut self, digit: u8) {
-        if !self.input.try_add_digit(digit, self.integer.as_ref()) {
+        let max = self.digits as usize;
+        if !self.input.try_add_digit(digit, self.integer.as_ref(), max) {
             return self.forget_command();
         }
         if self.last_key == Key::CloseParen {
@@ -1040,15 +1418,24 @@ impl Calculator {
         if !self.line.operand_added() {
             self.add_operand();
         }
-        self.line.add_unary_op(func.name());
+        self.line.add_unary_op(&func.name(self.angle));
         self.refresh();
+        if func == Func::Degrees && !self.no_prev_equ {
+            // `→deg` is Windows' old inverse of `dms`: `SciCalcFunctions` sends `IDC_INV`
+            // through the engine, which hides the expression shown after `=` again.
+            self.shown.clear();
+        }
+        if matches!(func, Func::Trig(_)) && math::too_big_for_trig(&self.current) {
+            self.current = Number::zero();
+            return self.display_error(CalcError::InvalidInput);
+        }
         let result = match (&mut self.integer, func) {
             (Some(mode), Func::Not) => Ok(mode.not(&self.current)),
             (Some(mode), Func::RotateLeft) => Ok(mode.rotate(&self.current, true, false)),
             (Some(mode), Func::RotateRight) => Ok(mode.rotate(&self.current, false, false)),
             (Some(mode), Func::RotateLeftCarry) => Ok(mode.rotate(&self.current, true, true)),
             (Some(mode), Func::RotateRightCarry) => Ok(mode.rotate(&self.current, false, true)),
-            _ => func.apply(&self.current),
+            _ => func.apply(&self.current, self.angle),
         };
         match result {
             Ok(result) => {
@@ -1075,8 +1462,17 @@ impl Calculator {
         }
         self.current = -self.current.clone();
         self.display_num();
-        self.line.add_unary_op(Func::Negate.name());
+        self.line.add_unary_op(&Func::Negate.name(self.angle));
         self.refresh();
+    }
+
+    /// π, e or a random number, which Windows treats like typing a number: it replaces
+    /// the last operand (`IDC_PI`, `IDC_EULER`, `IDC_RAND`). A number next to it doesn't
+    /// multiply, so `2π` is π.
+    fn constant(&mut self, value: Number) {
+        self.check_and_add_last_bin_op_to_history(true);
+        self.current = value;
+        self.display_num();
     }
 
     /// `%` as in Windows: after `×` or `÷` the value divided by 100, otherwise a
@@ -1308,7 +1704,7 @@ impl Calculator {
     fn number_text(&self) -> String {
         match &self.integer {
             Some(mode) => mode.format(&self.current, mode.radix),
-            None => expression_number(&self.current),
+            None => format_with(&self.current, false, self.digits, self.notation),
         }
     }
 
@@ -1348,6 +1744,7 @@ impl Calculator {
                 HistoryEntry {
                     expression,
                     result: self.current.clone(),
+                    text: self.format_value(&self.current),
                 },
             );
             self.history.truncate(HISTORY_LIMIT);
@@ -1452,10 +1849,12 @@ impl Calculator {
     }
 
     /// Starts over, as when Windows switches to this mode: `C`, and the Programmer mode
-    /// goes back to decimal (`SetStandardMode`, `SetProgrammerMode`). Memory, history and
-    /// the word size stay.
+    /// goes back to decimal (`SetStandardMode`, `SetScientificMode`, `SetProgrammerMode`).
+    /// F-E is off: the view model turns it off when the Scientific mode is left. Memory,
+    /// history, the word size and the angle unit stay.
     pub fn reset(&mut self) {
         self.process(Command::Clear);
+        self.notation = false;
         if self.integer.is_some() {
             self.process(Command::Radix(Radix::Decimal));
         }
@@ -1557,20 +1956,25 @@ impl Calculator {
         // after the first digit that isn't 0, and remembers a sign before `(`
         // until the matching `)`. In the Programmer mode the letters are hex
         // digits and `%` is the remainder; other characters, like the `x` of `0x1F`
-        // or a `u` suffix, are skipped.
+        // or a `u` suffix, are skipped. Elsewhere `e` is `exp`, and a sign after it
+        // goes to the exponent; the Scientific mode has `^` and `%` (mod) too.
         let integer = self.integer.is_some();
+        let scientific = self.scientific();
         let mut first = true;
         let mut previous_operator = false;
         let mut negate = false;
         let mut negate_stack = Vec::new();
-        for c in text.chars() {
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
             let (command, mut can_negate) = match c {
                 '0'..='9' => (Command::Digit(c as u8 - b'0'), true),
                 'a'..='f' | 'A'..='F' if integer => {
                     let digit = c.to_digit(16).unwrap_or_default() as u8;
                     (Command::Digit(digit), false)
                 }
-                '%' if integer => (Command::Operator(Op::Mod), false),
+                'e' | 'E' => (Command::Exponent, false),
+                '%' if integer || scientific => (Command::Operator(Op::Mod), false),
+                '^' if scientific => (Command::Operator(Op::Power), false),
                 '.' => (Command::Decimal, false),
                 '+' => (Command::Operator(Op::Add), false),
                 '-' => (Command::Operator(Op::Subtract), false),
@@ -1623,6 +2027,19 @@ impl Calculator {
                     }
                 }
             }
+            // The exponent's sign: ± flips it once `exp` was pressed.
+            if command == Command::Exponent {
+                match chars.peek() {
+                    Some('-') => {
+                        self.execute(Command::Function(Func::Negate));
+                        chars.next();
+                    }
+                    Some('+') => {
+                        chars.next();
+                    }
+                    _ => {}
+                }
+            }
         }
         true
     }
@@ -1656,7 +2073,6 @@ pub(crate) fn clean_paste(text: &str) -> Option<String> {
 }
 
 /// Checks pasted text like Windows' `CopyPasteManager::ValidatePasteExpression`.
-/// Numbers in e-notation are rejected: the engine has no exponent entry yet.
 fn paste_is_valid(text: &str, scientific: bool) -> bool {
     let Some(expression) = clean_paste(text) else {
         return false;
@@ -1673,7 +2089,7 @@ fn paste_is_valid(text: &str, scientific: bool) -> bool {
     let max_length = if scientific { 32 } else { MAX_DIGITS as usize };
     !operands.is_empty()
         && operands.iter().all(|operand| {
-            operand_matches(operand, scientific) && operand_length(operand) <= max_length
+            number_matches(operand, scientific, true) && operand_length(operand) <= max_length
         })
 }
 
@@ -1760,8 +2176,15 @@ fn split_operands(expression: &str, valid: &str, exponents: bool) -> Vec<String>
 
 /// Whether an operand is a number: `\s*[-+]?(\d+(\.\d*)?|\.\d+)\s*`, and in the
 /// Scientific mode with opening parentheses (each may be signed) before it and
-/// closing ones after it, or just an optional sign.
+/// closing ones after it, or just an optional sign. This is the converters' pattern,
+/// without e-notation.
 pub(crate) fn operand_matches(operand: &str, scientific: bool) -> bool {
+    number_matches(operand, scientific, false)
+}
+
+/// `operand_matches`, optionally with an exponent after the number (`e[+-]?\d+`), as the
+/// Standard and Scientific modes accept.
+fn number_matches(operand: &str, scientific: bool, exponent: bool) -> bool {
     let mut rest = operand.trim_start();
     if scientific {
         if matches!(rest.trim_end(), "" | "+" | "-") {
@@ -1787,6 +2210,14 @@ pub(crate) fn operand_matches(operand: &str, scientific: bool) -> bool {
     if integer == 0 && fraction == 0 {
         return false;
     }
+    if exponent && let Some(after) = rest.strip_prefix('e') {
+        let after = after.strip_prefix(['+', '-']).unwrap_or(after);
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 {
+            return false;
+        }
+        rest = &after[digits..];
+    }
     if scientific {
         rest = rest.trim_start().trim_start_matches(')');
     }
@@ -1794,22 +2225,25 @@ pub(crate) fn operand_matches(operand: &str, scientific: bool) -> bool {
 }
 
 /// Digits that count towards the operand length limit
-/// (`StandardScientificOperandLength` after `SanitizeOperand`).
+/// (`StandardScientificOperandLength` after `SanitizeOperand`): neither the decimal
+/// point, nor a leading `0.`, nor the exponent count.
 fn operand_length(operand: &str) -> usize {
     let sanitized: String = operand
         .chars()
         .filter(|c| !matches!(c, '\'' | '_' | '`' | '(' | ')' | '-' | '+'))
         .collect();
-    let length = sanitized.chars().count();
+    let mut length = sanitized.chars().count();
     if sanitized.contains('.') && length >= 2 {
         if sanitized.starts_with("0.") {
-            length - 2
+            length -= 2;
         } else {
-            length - 1
+            length -= 1;
         }
-    } else {
-        length
     }
+    if let Some(at) = sanitized.find('e') {
+        length = length.saturating_sub(sanitized.len() - at);
+    }
+    length
 }
 
 // ------------------------------------------------------------- arithmetic
@@ -1823,6 +2257,10 @@ fn apply(left: &Number, op: Op, right: &Number) -> Result<Number, CalcError> {
         Op::Divide if right.is_zero() && left.is_zero() => return Err(CalcError::Undefined),
         Op::Divide if right.is_zero() => return Err(CalcError::DivideByZero),
         Op::Divide => left / right,
+        Op::Mod => math::modulo(left, right),
+        Op::Power => math::power(left, right)?,
+        Op::Root => math::root(left, right)?,
+        Op::LogBase => math::log_base(left, right)?,
         // The Programmer mode's operators run in `IntegerMode::apply`.
         _ => return Err(CalcError::InvalidInput),
     };
@@ -1854,16 +2292,7 @@ fn normalize(v: Number) -> Result<Number, CalcError> {
     if v.denom().bits() <= MAX_DENOM_BITS {
         return Ok(v);
     }
-    let k = INTERNAL_DIGITS - 1 - e;
-    let mut digits = scaled_round(&magnitude, v.denom(), k);
-    if v.is_negative() {
-        digits = -digits;
-    }
-    Ok(if k >= 0 {
-        Number::new(digits, pow10(k))
-    } else {
-        Number::from_integer(digits * pow10(-k))
-    })
+    Ok(math::round_digits(&v, INTERNAL_DIGITS))
 }
 
 fn pow10(n: i64) -> BigInt {
@@ -1903,35 +2332,33 @@ fn scaled_round(a: &BigInt, q: &BigInt, k: i64) -> BigInt {
 
 // ------------------------------------------------------------- formatting
 
-/// A number for the display, with thousands separators.
+/// A number as the Standard mode's display writes it, with thousands separators.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn format_number(v: &Number) -> String {
-    format_with(v, true)
+    format_with(v, true, MAX_DIGITS, false)
 }
 
-/// A number for the expression line; Windows writes it without separators.
-fn expression_number(v: &Number) -> String {
-    format_with(v, false)
-}
-
-/// Formats a number like Windows: up to 16 significant digits, scientific notation
-/// for large numbers and for small ones that don't fit into 16 decimal places.
-fn format_with(v: &Number, grouping: bool) -> String {
+/// Formats a number like Windows' `NumberToString`: up to `precision` significant
+/// digits, with scientific notation for large numbers and for small ones that don't fit
+/// into `precision` decimal places, or always (`scientific`, the Scientific mode's
+/// F-E), as in `1.5e+3` and `5.e+0`. The expression line has no `grouping`.
+fn format_with(v: &Number, grouping: bool, precision: i64, scientific: bool) -> String {
     if v.is_zero() {
-        return "0".to_string();
+        return if scientific { "0.e+0" } else { "0" }.to_string();
     }
     let sign = if v.is_negative() { "-" } else { "" };
     let a = v.numer().abs();
     let q = v.denom();
     let mut e = exponent(&a, q);
-    let mut digits = scaled_round(&a, q, MAX_DIGITS - 1 - e);
+    let mut digits = scaled_round(&a, q, precision - 1 - e);
     // Rounding may have added a digit (9.99…96 → 10.00…0).
-    if digits >= pow10(MAX_DIGITS) {
+    if digits >= pow10(precision) {
         digits /= 10;
         e += 1;
     }
     let digits = digits.to_string();
 
-    if (0..MAX_DIGITS).contains(&e) {
+    if !scientific && (0..precision).contains(&e) {
         let (int, frac) = digits.split_at(e as usize + 1);
         let int = if grouping {
             group_thousands(int)
@@ -1942,18 +2369,18 @@ fn format_with(v: &Number, grouping: bool) -> String {
         let point = if frac.is_empty() { "" } else { "." };
         return format!("{sign}{int}{point}{frac}");
     }
-    if e < 0 {
+    if !scientific && e < 0 {
         // Zeros after the decimal point before the first significant digit.
         let zeros = -e - 1;
         if zeros <= MAX_ZEROS_AFTER_DECIMAL {
-            // 0.0033333333333333: simply 16 digits after the point.
-            let frac = scaled_round(&a, q, MAX_DIGITS).to_string();
-            let frac = format!("{frac:0>width$}", width = MAX_DIGITS as usize);
+            // 0.0033333333333333: simply 16 (or 32) digits after the point.
+            let frac = scaled_round(&a, q, precision).to_string();
+            let frac = format!("{frac:0>width$}", width = precision as usize);
             return format!("{sign}0.{}", frac.trim_end_matches('0'));
         }
-        // 0.000125: the whole number fits into 16 digits after the point.
+        // 0.000125: the whole number fits into 16 (or 32) digits after the point.
         let significant = digits.trim_end_matches('0');
-        if zeros + significant.len() as i64 <= MAX_DIGITS {
+        if zeros + significant.len() as i64 <= precision {
             return format!("{sign}0.{}{significant}", "0".repeat(zeros as usize));
         }
     }
@@ -1978,19 +2405,29 @@ pub(crate) fn group_thousands(digits: &str) -> String {
     out
 }
 
+/// A typed number: `-12.5`, or with an exponent, `1.5e+3`, `2.e-4`.
 fn parse_decimal(input: &str) -> Number {
     let (negative, unsigned) = match input.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, input),
     };
-    let (int, frac) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let (mantissa, exponent) = match unsigned.split_once('e') {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i64>().unwrap_or(0)),
+        None => (unsigned, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     let digits = format!("{int}{frac}");
     let numer: BigInt = if digits.is_empty() {
         BigInt::zero()
     } else {
         digits.parse().unwrap()
     };
-    let v = Number::new(numer, pow10(frac.len() as i64));
+    let scale = exponent - frac.len() as i64;
+    let v = if scale >= 0 {
+        Number::from_integer(numer * pow10(scale))
+    } else {
+        Number::new(numer, pow10(-scale))
+    };
     if negative { -v } else { v }
 }
 
@@ -2167,6 +2604,9 @@ mod tests {
         press(&mut calc, "1/0=");
         assert!(calc.has_error());
         assert!(!calc.is_enabled(Command::Operator(Op::Add)));
+        // As in Windows' number pad, the decimal point is disabled, and `=` isn't.
+        assert!(!calc.is_enabled(Command::Decimal));
+        assert!(calc.is_enabled(Command::Equals));
         press(&mut calc, "+");
         assert!(calc.has_error());
         press(&mut calc, "7");
@@ -2426,7 +2866,15 @@ mod tests {
 
     #[test]
     fn invalid_paste_shows_invalid_input() {
-        for text in ["abc", "12345678901234567", "5+", "(1+2)", "1e5", ""] {
+        for text in [
+            "abc",
+            "12345678901234567",
+            "5+",
+            "(1+2)",
+            "1e12345",
+            "1e",
+            "",
+        ] {
             let mut calc = Calculator::default();
             assert!(!calc.paste(text), "{text:?} should be rejected");
             assert_eq!(calc.display(), "Invalid input", "{text:?}");
@@ -2456,6 +2904,345 @@ mod tests {
         assert!(operand_matches("3))", true));
         assert_eq!(operand_length("0.123"), 3);
         assert_eq!(operand_length("-12.5"), 3);
+    }
+
+    // ------------------------------------------------------------ scientific
+
+    /// Presses Scientific mode keys given as words: numbers (`12`, `2.5`),
+    /// `+ - * / ( ) =`, `^` (xʸ), `yroot`, `logy` (log base y), `mod`, `neg` (±), the
+    /// functions `sqr cube sqrt cbrt inv 10x 2x ex log ln fact abs floor ceil dms todeg`,
+    /// the trigonometric ones by name with `a` for the inverse and `h` for hyperbolic
+    /// (`asin`, `sinh`, `asinh`), `pi euler rand`, `exp`, `fe` (F-E), `DEG RAD GRAD`,
+    /// `c`, `ce` and `bs` (⌫).
+    fn press_scientific(calc: &mut Calculator, keys: &str) {
+        for key in keys.split_whitespace() {
+            let function = |f| Command::Function(f);
+            let command = match key {
+                "+" => Command::Operator(Op::Add),
+                "-" => Command::Operator(Op::Subtract),
+                "*" => Command::Operator(Op::Multiply),
+                "/" => Command::Operator(Op::Divide),
+                "^" => Command::Operator(Op::Power),
+                "yroot" => Command::Operator(Op::Root),
+                "logy" => Command::Operator(Op::LogBase),
+                "mod" => Command::Operator(Op::Mod),
+                "(" => Command::OpenParen,
+                ")" => Command::CloseParen,
+                "=" => Command::Equals,
+                "neg" => function(Func::Negate),
+                "sqr" => function(Func::Square),
+                "cube" => function(Func::Cube),
+                "sqrt" => function(Func::SquareRoot),
+                "cbrt" => function(Func::CubeRoot),
+                "inv" => function(Func::Reciprocal),
+                "10x" => function(Func::TenToX),
+                "2x" => function(Func::TwoToX),
+                "ex" => function(Func::EToX),
+                "log" => function(Func::Log),
+                "ln" => function(Func::Ln),
+                "fact" => function(Func::Factorial),
+                "abs" => function(Func::Abs),
+                "floor" => function(Func::Floor),
+                "ceil" => function(Func::Ceil),
+                "dms" => function(Func::Dms),
+                "todeg" => function(Func::Degrees),
+                "pi" => Command::Pi,
+                "euler" => Command::Euler,
+                "rand" => Command::Random,
+                "exp" => Command::Exponent,
+                "fe" => Command::ToggleNotation,
+                "DEG" => Command::Angle(Angle::Degrees),
+                "RAD" => Command::Angle(Angle::Radians),
+                "GRAD" => Command::Angle(Angle::Gradians),
+                "c" => Command::Clear,
+                "ce" => Command::ClearEntry,
+                "bs" => Command::Backspace,
+                _ if key.chars().all(|c| c.is_ascii_digit() || c == '.') => {
+                    for c in key.chars() {
+                        calc.execute(match c {
+                            '.' => Command::Decimal,
+                            _ => Command::Digit(c as u8 - b'0'),
+                        });
+                    }
+                    continue;
+                }
+                _ => {
+                    let inverse = key.starts_with('a');
+                    let name = key.trim_start_matches('a');
+                    let hyperbolic = name.len() == 4;
+                    let function = TrigFunction::ALL
+                        .into_iter()
+                        .find(|f| f.label() == &name[..3])
+                        .unwrap_or_else(|| panic!("unknown key {key}"));
+                    Command::Function(Func::Trig(Trig {
+                        function,
+                        inverse,
+                        hyperbolic,
+                    }))
+                }
+            };
+            calc.execute(command);
+        }
+    }
+
+    fn run_scientific(keys: &str) -> (String, String) {
+        let mut calc = Calculator::with_precedence();
+        press_scientific(&mut calc, keys);
+        (calc.display(), calc.expression())
+    }
+
+    fn pair(display: &str, expression: &str) -> (String, String) {
+        (display.to_string(), expression.to_string())
+    }
+
+    #[test]
+    fn scientific_shows_32_digits() {
+        assert_eq!(
+            run_scientific("1 / 3 =").0,
+            "0.33333333333333333333333333333333"
+        );
+        assert_eq!(
+            run_scientific("2 sqrt").0,
+            "1.4142135623730950488016887242097"
+        );
+        // 32 digits can be typed, and the expression line has them all.
+        assert_eq!(
+            run_scientific("123456789012345678901234567890123456"),
+            pair("12,345,678,901,234,567,890,123,456,789,012", "")
+        );
+        assert_eq!(
+            run_scientific("1 / 3 = +").1,
+            "0.33333333333333333333333333333333 +"
+        );
+        // The Standard mode keeps its 16.
+        assert_eq!(run("1/3=").0, "0.3333333333333333");
+    }
+
+    #[test]
+    fn scientific_binary_operators() {
+        assert_eq!(run_scientific("2 ^ 10 ="), pair("1,024", "2 ^ 10 ="));
+        // xʸ binds tighter than × and ÷.
+        assert_eq!(run_scientific("2 * 3 ^ 2 =").0, "18");
+        assert_eq!(run_scientific("2 ^ 3 * 2 =").0, "16");
+        assert_eq!(run_scientific("8 yroot 3 ="), pair("2", "8 yroot 3 ="));
+        assert_eq!(run_scientific("8 logy 2 ="), pair("3", "8 log base 2 ="));
+        assert_eq!(run_scientific("10 mod 3 ="), pair("1", "10 Mod 3 ="));
+        // The remainder has the sign of the divisor, and x mod 0 is x.
+        assert_eq!(run_scientific("10 neg mod 3 =").0, "2");
+        assert_eq!(run_scientific("10 mod 3 neg =").0, "-2");
+        assert_eq!(run_scientific("7 mod 0 =").0, "7");
+        assert_eq!(run_scientific("2 neg ^ 0.5 =").0, "Invalid input");
+        assert_eq!(run_scientific("0 ^ 1 neg =").0, "Invalid input");
+    }
+
+    #[test]
+    fn scientific_functions_in_the_expression_line() {
+        assert_eq!(run_scientific("30 sin"), pair("0.5", "sin₀(30)"));
+        assert_eq!(run_scientific("RAD 0 cos"), pair("1", "cosᵣ(0)"));
+        assert_eq!(run_scientific("GRAD 100 sin"), pair("1", "sin₉(100)"));
+        assert_eq!(run_scientific("0.5 asin"), pair("30", "sin₀⁻¹(0.5)"));
+        assert_eq!(run_scientific("0 sinh"), pair("0", "sinh(0)"));
+        assert_eq!(run_scientific("0 atanh"), pair("0", "tanh⁻¹(0)"));
+        assert_eq!(run_scientific("60 sec"), pair("2", "sec₀(60)"));
+        assert_eq!(run_scientific("2 asec"), pair("60", "sec₀⁻¹(2)"));
+        assert_eq!(run_scientific("1000 log"), pair("3", "log(1000)"));
+        assert_eq!(run_scientific("1 ln"), pair("0", "ln(1)"));
+        assert_eq!(run_scientific("5 fact"), pair("120", "fact(5)"));
+        assert_eq!(run_scientific("2 cube"), pair("8", "cube(2)"));
+        assert_eq!(run_scientific("27 cbrt"), pair("3", "cuberoot(27)"));
+        assert_eq!(run_scientific("3 10x"), pair("1,000", "10^(3)"));
+        assert_eq!(run_scientific("3 2x"), pair("8", "2^(3)"));
+        assert_eq!(
+            run_scientific("1 ex"),
+            pair("2.7182818284590452353602874713527", "e^(1)")
+        );
+        assert_eq!(run_scientific("5 neg abs"), pair("5", "abs(-5)"));
+        assert_eq!(run_scientific("2.5 neg floor"), pair("-3", "floor(-2.5)"));
+        assert_eq!(run_scientific("2.5 neg ceil"), pair("-2", "ceil(-2.5)"));
+        assert_eq!(run_scientific("30.5 dms"), pair("30.3", "dms(30.5)"));
+        assert_eq!(run_scientific("30.3 todeg"), pair("30.5", "degrees(30.3)"));
+        // Functions nest and apply to the operand after an operator.
+        assert_eq!(run_scientific("2 + 9 sqrt ="), pair("5", "2 + √(9) ="));
+        assert_eq!(run_scientific("90 sin sqr"), pair("1", "sqr(sin₀(90))"));
+    }
+
+    #[test]
+    fn scientific_errors() {
+        assert_eq!(run_scientific("90 tan"), pair("Invalid input", "tan₀(90)"));
+        assert_eq!(run_scientific("0 ln").0, "Invalid input");
+        assert_eq!(run_scientific("4 neg sqrt").0, "Invalid input");
+        assert_eq!(run_scientific("3 neg fact").0, "Invalid input");
+        assert_eq!(run_scientific("3250 fact").0, "Overflow");
+        assert_eq!(run_scientific("0 csc").0, "Cannot divide by zero");
+        assert_eq!(run_scientific("1 atanh").0, "Cannot divide by zero");
+        assert_eq!(run_scientific("2 asin").0, "Invalid input");
+        // Windows refuses trigonometry from 10^100 on, even sinh.
+        assert_eq!(
+            run_scientific("1 exp 100 sinh"),
+            pair("Invalid input", "sinh(1.e+100)")
+        );
+        // In the error state the functions are disabled, but not F-E and the angle unit
+        // (as in Windows); they clear the error and apply.
+        let mut calc = Calculator::with_precedence();
+        press_scientific(&mut calc, "0 ln");
+        assert!(!calc.is_enabled(Command::Function(Func::Log)));
+        assert!(!calc.is_enabled(Command::Pi));
+        assert!(calc.is_enabled(Command::ToggleNotation));
+        press_scientific(&mut calc, "RAD");
+        assert_eq!((calc.display(), calc.angle()), ("0".into(), Angle::Radians));
+        press_scientific(&mut calc, "0 ln 7");
+        assert_eq!(calc.display(), "7");
+    }
+
+    #[test]
+    fn scientific_constants() {
+        assert_eq!(
+            run_scientific("pi"),
+            pair("3.1415926535897932384626433832795", "")
+        );
+        assert_eq!(
+            run_scientific("euler").0,
+            "2.7182818284590452353602874713527"
+        );
+        // π replaces the typed number: no multiplication, as in Windows.
+        assert_eq!(run_scientific("2 pi").0, run_scientific("pi").0);
+        assert_eq!(
+            run_scientific("5 + pi ="),
+            pair(
+                "8.1415926535897932384626433832795",
+                "5 + 3.1415926535897932384626433832795 ="
+            )
+        );
+        assert_eq!(run_scientific("pi ( 2 ) ="), pair("2", "(2) ="));
+        let mut calc = Calculator::with_precedence();
+        press_scientific(&mut calc, "rand");
+        let shown = calc.display();
+        assert!(shown.starts_with("0.") || shown == "0", "{shown}");
+    }
+
+    #[test]
+    fn exponent_entry() {
+        assert_eq!(run_scientific("1.5 exp 3"), pair("1.5e+3", ""));
+        assert_eq!(run_scientific("1.5 exp 3 +"), pair("1,500", "1500 +"));
+        // `exp` adds a decimal point; ± flips the exponent's sign.
+        assert_eq!(run_scientific("2 exp 3 neg"), pair("2.e-3", ""));
+        assert_eq!(run_scientific("2 exp 3 neg =").0, "0.002");
+        assert_eq!(run_scientific("exp 5"), pair("0.e+5", ""));
+        // The exponent has at most 4 digits and no decimal point.
+        assert_eq!(run_scientific("1 exp 123456").0, "1.e+1234");
+        assert_eq!(run_scientific("1 exp 1.2").0, "1.e+12");
+        // ⌫ removes the exponent's digits, then the exponent.
+        assert_eq!(run_scientific("5 exp 12 bs").0, "5.e+1");
+        assert_eq!(run_scientific("5 exp 12 bs bs").0, "5.e+0");
+        assert_eq!(run_scientific("5 exp 12 bs bs bs").0, "5.");
+        // `exp` does nothing to a finished number.
+        assert_eq!(run_scientific("5 + exp 3 =").0, "8");
+        // A typed number beyond Windows' 4-digit exponents overflows.
+        assert_eq!(
+            run_scientific("99 exp 9999 +"),
+            pair("Overflow", "9.9e+10000 +")
+        );
+    }
+
+    #[test]
+    fn scientific_notation_toggle() {
+        assert_eq!(run_scientific("fe").0, "0.e+0");
+        assert_eq!(run_scientific("12345 fe").0, "1.2345e+4");
+        // While typing, the number shows as typed; once finished, in e-notation, in the
+        // expression line too.
+        assert_eq!(run_scientific("fe 5").0, "5");
+        assert_eq!(run_scientific("fe 5 +"), pair("5.e+0", "5.e+0 +"));
+        assert_eq!(run_scientific("fe 0.5 =").0, "5.e-1");
+        // C and CE turn it off, as Windows' view model does.
+        let mut calc = Calculator::with_precedence();
+        press_scientific(&mut calc, "fe 2 + 3 =");
+        assert!(calc.notation());
+        assert_eq!(calc.history()[0].text, "5.e+0");
+        press_scientific(&mut calc, "ce");
+        assert!(!calc.notation());
+        press_scientific(&mut calc, "fe c");
+        assert!(!calc.notation());
+        // Switching modes turns it off too.
+        press_scientific(&mut calc, "fe");
+        calc.reset();
+        assert!(!calc.notation());
+    }
+
+    #[test]
+    fn angle_units() {
+        let mut calc = Calculator::with_precedence();
+        assert_eq!(calc.angle(), Angle::Degrees);
+        // A new unit finishes the typed number.
+        press_scientific(&mut calc, "30 RAD");
+        assert_eq!(calc.angle(), Angle::Radians);
+        press_scientific(&mut calc, "sin");
+        assert_eq!(calc.expression(), "sinᵣ(30)");
+        assert_eq!(calc.display(), "-0.98803162409286178998774890729446");
+        // The unit stays when the mode starts over.
+        calc.reset();
+        assert_eq!(calc.angle(), Angle::Radians);
+    }
+
+    #[test]
+    fn degrees_hide_the_expression_after_equals() {
+        // `→deg` sends `IDC_INV` through Windows' engine, which clears the expression
+        // shown after `=`.
+        assert_eq!(run_scientific("2 + 3 = todeg"), pair("5", ""));
+        assert_eq!(run_scientific("5 todeg"), pair("5", "degrees(5)"));
+        // It isn't a function to Windows: a new number replaces it instead of logging it.
+        let mut calc = Calculator::with_precedence();
+        press_scientific(&mut calc, "30.3 todeg 2");
+        assert!(calc.history().is_empty());
+        press_scientific(&mut calc, "c 4 sqrt 2");
+        assert_eq!(calc.history()[0].expression, "√(4)");
+    }
+
+    #[test]
+    fn scientific_history_is_its_own() {
+        let mut calc = Calculator::with_precedence();
+        press_scientific(&mut calc, "2 + 3 ^ 2 =");
+        assert_eq!(calc.history()[0].expression, "2 + 3 ^ 2 =");
+        assert_eq!(calc.history()[0].text, "11");
+        assert_eq!(calc.display(), "11");
+    }
+
+    #[test]
+    fn scientific_keys_only_in_the_scientific_mode() {
+        let standard = Calculator::default();
+        assert!(!standard.is_enabled(Command::Function(Func::Log)));
+        assert!(!standard.is_enabled(Command::Operator(Op::Power)));
+        assert!(!standard.is_enabled(Command::Operator(Op::Mod)));
+        assert!(!standard.is_enabled(Command::Pi));
+        // `exp` exists for paste.
+        assert!(standard.is_enabled(Command::Exponent));
+        let programmer = Calculator::programmer();
+        assert!(!programmer.is_enabled(Command::Operator(Op::Power)));
+        assert!(!programmer.is_enabled(Command::Exponent));
+        assert!(!programmer.is_enabled(Command::ToggleNotation));
+        let scientific = Calculator::with_precedence();
+        assert!(scientific.is_enabled(Command::Operator(Op::Mod)));
+        assert!(!scientific.is_enabled(Command::Operator(Op::And)));
+    }
+
+    #[test]
+    fn paste_e_notation_and_scientific_operators() {
+        let mut calc = Calculator::default();
+        assert!(calc.paste("1e5"));
+        assert_eq!(calc.display(), "1.e+5");
+        assert!(calc.paste("1.5e-3="));
+        assert_eq!(calc.display(), "0.0015");
+        assert!(calc.paste("2e+3+1="));
+        assert_eq!(calc.display(), "2,001");
+        // `^` and `%` are the Scientific mode's.
+        assert!(!calc.paste("2^10"));
+        let mut scientific = Calculator::with_precedence();
+        assert!(scientific.paste("2^10="));
+        assert_eq!(scientific.display(), "1,024");
+        assert!(scientific.paste("10%3="));
+        assert_eq!(scientific.display(), "1");
+        assert!(scientific.paste("-2e-1*5="));
+        assert_eq!(scientific.display(), "-1");
+        assert_eq!(operand_length("1.5e-12"), 2);
     }
 
     // ------------------------------------------------------------ programmer
