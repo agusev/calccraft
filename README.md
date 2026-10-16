@@ -11,6 +11,8 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 - **Memory:** `MC`, `MR`, `M+`, `M−`, `MS`, plus the memory list (`M˅`) with per-slot `MC` / `M+` / `M−`.
 - **History:** every calculation is logged. Click an entry to bring it back, or use the trash button to clear the list.
 - **Keep on top:** a compact always-on-top window, the same as in Windows.
+- **Settings:** opened from the menu, as in Windows. It has the App theme choice (Light, Dark or
+  Use system setting), the app version, and links for sending feedback and to the project on GitHub.
 - **Exact arithmetic:** numbers are stored as big rationals, so `0.1 + 0.2 − 0.3` is exactly `0`
   and `1 ÷ 3 × 3` is exactly `1`.
 - **Windows behavior:** immediate execution without operator precedence (`2 + 3 × 4 = 20`),
@@ -32,7 +34,7 @@ It looks like the original (Segoe UI fonts, Fluent icons, the same layout and co
 | `F9` | Negate (`+/−`) |
 | `Backspace` | Delete the last digit |
 | `Delete` | Clear entry (`CE`) |
-| `Esc` | Clear (`C`), or close an open panel |
+| `Esc` | Clear (`C`), close an open panel, or leave Settings |
 | `Ctrl+M` / `Ctrl+P` / `Ctrl+Q` / `Ctrl+R` / `Ctrl+L` | `MS` / `M+` / `M−` / `MR` / `MC` |
 | `Ctrl+H` | Show or hide history |
 | `Ctrl+Shift+D` | Clear history |
@@ -103,7 +105,10 @@ Tags with a suffix, such as `v1.0.0-beta.1`, are published as pre-releases.
 
 - Only the Standard mode exists. Scientific, programmer, date and converter modes are not implemented.
 - The colors are fixed: the purple dark palette from the reference screenshot. Windows tints
-  its window with the Mica effect and your accent color. There is no light theme.
+  its window with the Mica effect and your accent color. There is no light theme yet: the App
+  theme choice in Settings is not applied, and it is forgotten when the app closes.
+- The About section in Settings shows only the name and version, without the license and
+  privacy links.
 - The text is always English, and numbers always use en-US formatting (`1,234.5`),
   whatever the system locale.
 - In wide windows, history and memory open over the keypad instead of in a docked side panel.

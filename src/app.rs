@@ -4,9 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui::{
-    self, Align, Align2, Color32, Context, CornerRadius, Event, FontFamily, FontId, Galley, Id,
-    Key, Modifiers, Painter, Rect, Sense, Stroke, StrokeKind, TextFormat, Ui, UiBuilder,
-    ViewportCommand, WindowLevel, pos2, text::LayoutJob, vec2,
+    self, Align, Align2, Color32, Context, CornerRadius, CursorIcon, Event, FontFamily, FontId,
+    Galley, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextFormat,
+    TextureHandle, TextureOptions, Ui, UiBuilder, ViewportCommand, WindowLevel, pos2,
+    text::LayoutJob, vec2,
 };
 
 use crate::engine::{Calculator, Command, Func, Op, format_number};
@@ -32,11 +33,25 @@ const TEXT_PRESSED: Color32 = Color32::from_rgb(0xCF, 0xC8, 0xCF);
 const TEXT_SECONDARY: Color32 = Color32::from_rgb(0xC5, 0xBE, 0xC5);
 const TEXT_DISABLED: Color32 = Color32::from_rgb(0x6C, 0x62, 0x6D);
 const TEXT_ON_ACCENT: Color32 = Color32::from_rgb(0x1A, 0x0F, 0x1B);
+// Settings page.
+const CARD: Color32 = Color32::from_rgb(0x34, 0x26, 0x35);
+const CARD_BORDER: Color32 = Color32::from_rgb(0x22, 0x18, 0x25);
+const RADIO_RING: Color32 = Color32::from_rgb(0x9D, 0x97, 0x9F);
+const RADIO_FILL: Color32 = Color32::from_rgb(0x2C, 0x23, 0x33);
+const RADIO_DOT: Color32 = Color32::BLACK;
+const LINK: Color32 = Color32::from_rgb(0xF0, 0xC0, 0xF4);
+// Not sampled: the link color at 80% and 60% opacity over the background.
+const LINK_HOVER: Color32 = Color32::from_rgb(0xC8, 0x9F, 0xCC);
+const LINK_PRESSED: Color32 = Color32::from_rgb(0xA0, 0x7E, 0xA3);
 
 // Glyphs from the Segoe Fluent Icons / Segoe MDL2 Assets fonts.
 const ICON_MENU: char = '\u{E700}';
 const ICON_CHEVRON_DOWN: char = '\u{E70D}';
+const ICON_CHEVRON_UP: char = '\u{E70E}';
+const ICON_SETTINGS: char = '\u{E713}';
+const ICON_BACK: char = '\u{E72B}';
 const ICON_DELETE: char = '\u{E74D}';
+const ICON_THEME: char = '\u{E790}';
 const ICON_HISTORY: char = '\u{E81C}';
 const ICON_CALCULATOR: char = '\u{E8EF}';
 const ICON_MULTIPLY: char = '\u{E947}';
@@ -58,12 +73,30 @@ const COMPACT_SIZE: egui::Vec2 = vec2(320.0, 394.0);
 /// How long (in seconds) a button looks pressed after its keyboard key is pressed.
 const KEY_FLASH: f64 = 0.1;
 
+const REPOSITORY_URL: &str = "https://github.com/gavrilov/calccraft";
+const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flyout {
     None,
     History,
     Memory,
     Navigation,
+}
+
+/// What fills the window: the calculator or, as in Windows, the Settings page instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Calculator,
+    Settings,
+}
+
+/// The "App theme" choice. It is only remembered for now: the colors are always the dark ones.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Theme {
+    Light,
+    Dark,
+    System,
 }
 
 /// Button style.
@@ -86,6 +119,12 @@ pub struct CalculatorApp {
     has_icons: bool,
     /// Command triggered from the keyboard and when, to highlight its button.
     key_flash: Option<(Command, f64)>,
+    page: Page,
+    theme: Theme,
+    /// Whether the "App theme" card on the Settings page shows its options.
+    theme_expanded: bool,
+    /// The window icon, shown in the About card.
+    app_icon: TextureHandle,
 }
 
 impl CalculatorApp {
@@ -94,6 +133,16 @@ impl CalculatorApp {
         let has_icons = setup_fonts(&cc.egui_ctx);
         #[cfg(windows)]
         tint_title_bar(cc);
+        let icon = window_icon();
+        let app_icon = cc.egui_ctx.load_texture(
+            "app-icon",
+            egui::ColorImage::from_rgba_unmultiplied(
+                [icon.width as usize, icon.height as usize],
+                &icon.rgba,
+            ),
+            // Mipmaps keep the 64 px icon smooth at the 16 pt it is drawn at.
+            TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
+        );
         Self {
             calc: Calculator::default(),
             flyout: Flyout::None,
@@ -101,12 +150,23 @@ impl CalculatorApp {
             full_size: None,
             has_icons,
             key_flash: None,
+            page: Page::Calculator,
+            theme: Theme::System,
+            theme_expanded: false,
+            app_icon,
         }
     }
 
     // -------------------------------------------------------------- keyboard
 
     fn handle_keyboard(&mut self, ctx: &Context) {
+        if self.page == Page::Settings {
+            // The calculator is hidden, so its keys and shortcuts do nothing here.
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                self.page = Page::Calculator;
+            }
+            return;
+        }
         let events = ctx.input(|i| i.events.clone());
         let now = ctx.input(|i| i.time);
         for event in events {
@@ -767,46 +827,327 @@ impl CalculatorApp {
             pos2(panel.left() + 4.0, panel.top() + HEADER_HEIGHT + 34.0),
             vec2(panel.width() - 8.0, 40.0),
         );
-        let response = ui.interact(item, Id::new("nav-standard"), Sense::CLICK);
-        painter.rect_filled(
-            item,
-            RADIUS,
-            if response.hovered() {
-                OPERATOR_HOVER
-            } else {
-                SUBTLE_HOVER
-            },
+        let icon = self.icon(ICON_CALCULATOR, "▦", 16.0);
+        close |= self.nav_item(ui, item, Id::new("nav-standard"), icon, "Standard", true);
+
+        // Settings sits at the bottom of the pane, below a separator, as in Windows.
+        let item = Rect::from_min_size(
+            pos2(panel.left() + 4.0, panel.bottom() - 46.0),
+            vec2(panel.width() - 8.0, 40.0),
         );
-        let pill =
-            Rect::from_center_size(pos2(item.left() + 2.0, item.center().y), vec2(3.0, 16.0));
-        painter.rect_filled(pill, 2.0, ACCENT);
-        let icon = painter.layout_job(self.icon(ICON_CALCULATOR, "▦", 16.0));
+        painter.hline(
+            panel.x_range(),
+            item.top() - 12.0,
+            Stroke::new(1.0, FLYOUT_BORDER),
+        );
+        let icon = self.icon(ICON_SETTINGS, "⚙", 16.0);
+        let settings = self.nav_item(ui, item, Id::new("nav-settings"), icon, "Settings", false);
+
+        if settings {
+            self.page = Page::Settings;
+        }
+        if close || settings || backdrop.clicked() {
+            self.flyout = Flyout::None;
+        }
+    }
+
+    /// Navigation pane entry. The selected one has a fill and the accent pill.
+    /// Returns `true` if it was clicked.
+    fn nav_item(
+        &self,
+        ui: &Ui,
+        rect: Rect,
+        id: Id,
+        icon: LayoutJob,
+        label: &str,
+        selected: bool,
+    ) -> bool {
+        let painter = ui.painter();
+        let response = ui.interact(rect, id, Sense::CLICK);
+        let fill = if response.is_pointer_button_down_on() || (selected && !response.hovered()) {
+            SUBTLE_HOVER
+        } else if response.hovered() {
+            OPERATOR_HOVER
+        } else {
+            Color32::TRANSPARENT
+        };
+        painter.rect_filled(rect, RADIUS, fill);
+        if selected {
+            let pill =
+                Rect::from_center_size(pos2(rect.left() + 2.0, rect.center().y), vec2(3.0, 16.0));
+            painter.rect_filled(pill, 2.0, ACCENT);
+        }
+        let icon = painter.layout_job(icon);
         painter.galley(
-            pos2(item.left() + 16.0, item.center().y - icon.size().y / 2.0),
+            pos2(rect.left() + 16.0, rect.center().y - icon.size().y / 2.0),
             icon,
             TEXT,
         );
         painter.text(
-            pos2(item.left() + 48.0, item.center().y),
+            pos2(rect.left() + 48.0, rect.center().y),
             Align2::LEFT_CENTER,
-            "Standard",
+            label,
             FontId::proportional(14.0),
             TEXT,
         );
-        close |= response.clicked();
+        response.clicked()
+    }
 
-        painter.text(
-            pos2(panel.left() + 16.0, panel.bottom() - 16.0),
-            Align2::LEFT_BOTTOM,
-            "Calculator · Rust + egui",
-            FontId::proportional(12.0),
-            TEXT_DISABLED,
+    // -------------------------------------------------------------- settings
+
+    fn draw_settings(&mut self, ui: &mut Ui, rect: Rect) {
+        // Windows puts the back button in its own title bar. This app keeps the system title
+        // bar, so the button takes the place of the menu button.
+        let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER_HEIGHT));
+        let back = Rect::from_center_size(
+            pos2(header.left() + 24.0, header.center().y),
+            vec2(40.0, 36.0),
+        );
+        let label = self.icon(ICON_BACK, "←", 16.0);
+        if self.button(
+            ui,
+            back,
+            Id::new("settings-back"),
+            Kind::Subtle,
+            true,
+            label,
+        ) {
+            self.page = Page::Calculator;
+        }
+        ui.painter().text(
+            pos2(header.left() + 48.0, header.center().y),
+            Align2::LEFT_CENTER,
+            "Settings",
+            FontId::new(20.0, semibold()),
+            TEXT,
         );
 
-        if close || backdrop.clicked() {
-            self.flyout = Flyout::None;
+        let mut action = None;
+        ui.scope_builder(
+            UiBuilder::new().max_rect(rect.with_min_y(header.bottom())),
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("settings")
+                    .auto_shrink(false)
+                    .show(ui, |ui| action = self.settings_content(ui));
+            },
+        );
+        match action {
+            Some(SettingsAction::ToggleTheme) => self.theme_expanded = !self.theme_expanded,
+            Some(SettingsAction::SetTheme(theme)) => self.theme = theme,
+            Some(SettingsAction::OpenUrl(url)) => ui.ctx().open_url(egui::OpenUrl::new_tab(url)),
+            None => {}
         }
     }
+
+    /// The scrolling part of the Settings page: the Appearance and About sections and the links.
+    fn settings_content(&self, ui: &mut Ui) -> Option<SettingsAction> {
+        // Distances measured on the Windows 11 Settings page.
+        const SIDE: f32 = 24.0;
+        const CARD_HEIGHT: f32 = 68.0;
+        // From a card's left edge to the center of its icon and to its text.
+        const ICON_X: f32 = 28.0;
+        const TEXT_X: f32 = 58.0;
+        const OPTION_HEIGHT: f32 = 40.0;
+        const THEMES: [(Theme, &str); 3] = [
+            (Theme::Light, "Light"),
+            (Theme::Dark, "Dark"),
+            (Theme::System, "Use system setting"),
+        ];
+
+        let width = ui.available_width();
+        let painter = ui.painter().clone();
+        let body = FontId::proportional(14.0);
+
+        // Lay out the text that wraps first: the page height depends on it.
+        let text_width = width - 2.0 * SIDE - TEXT_X - 40.0;
+        let title = painter.layout("App theme".into(), body.clone(), TEXT, text_width);
+        let subtitle = painter.layout(
+            "Select which app theme to display".into(),
+            FontId::proportional(12.0),
+            TEXT_SECONDARY,
+            text_width,
+        );
+        let header_height = (title.size().y + subtitle.size().y + 32.0).max(CARD_HEIGHT);
+        let options_height = if self.theme_expanded {
+            2.0 * MARGIN + THEMES.len() as f32 * OPTION_HEIGHT
+        } else {
+            0.0
+        };
+        let link_text = "GitHub";
+        let prefix = "To learn how you can contribute to CalcCraft, check out the project on ";
+        let paragraph = |link_color: Color32| {
+            let mut job = LayoutJob::default();
+            job.wrap.max_width = width - 2.0 * SIDE;
+            for (part, color) in [(prefix, TEXT), (link_text, link_color), (".", TEXT)] {
+                job.append(part, 0.0, TextFormat::simple(body.clone(), color));
+            }
+            painter.layout_job(job)
+        };
+        let mut contribute = paragraph(LINK);
+        let row_height = contribute.rows.first().map_or(0.0, |row| row.size.y);
+
+        // Vertical positions, from the top of the page body.
+        let appearance_y = 23.0;
+        let theme_top = appearance_y + 18.0;
+        let theme_bottom = theme_top + header_height + options_height;
+        let about_y = theme_bottom + 45.0;
+        let about_top = about_y + 18.0;
+        let feedback_y = about_top + CARD_HEIGHT + 25.0;
+        let contribute_top = feedback_y + 40.0 - row_height / 2.0;
+        let height = contribute_top + contribute.size().y + SIDE;
+
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let (left, right, top) = (rect.left() + SIDE, rect.right() - SIDE, rect.top());
+        let mut action = None;
+
+        // Appearance: the App theme card expands to show the three choices.
+        section_label(&painter, pos2(left, top + appearance_y), "Appearance");
+        let card = Rect::from_x_y_ranges(left..=right, top + theme_top..=top + theme_bottom);
+        let header = card.with_max_y(card.top() + header_height);
+        let response = ui.interact(header, Id::new("theme-card"), Sense::CLICK);
+        let fill = if response.is_pointer_button_down_on() {
+            SUBTLE_PRESSED
+        } else if response.hovered() {
+            OPERATOR
+        } else {
+            CARD
+        };
+        painter.rect_filled(card, RADIUS, CARD);
+        let corners = if self.theme_expanded {
+            CornerRadius {
+                nw: 4,
+                ne: 4,
+                sw: 0,
+                se: 0,
+            }
+        } else {
+            CornerRadius::same(4)
+        };
+        painter.rect_filled(header, corners, fill);
+        painter.rect_stroke(
+            card,
+            RADIUS,
+            Stroke::new(1.0, CARD_BORDER),
+            StrokeKind::Inside,
+        );
+        let icon = painter.layout_job(self.icon(ICON_THEME, "◐", 20.0));
+        painter.galley(
+            pos2(card.left() + ICON_X, header.center().y) - icon.size() / 2.0,
+            icon,
+            TEXT,
+        );
+        let text_top = header.center().y - (title.size().y + subtitle.size().y) / 2.0;
+        let title_height = title.size().y;
+        painter.galley(pos2(card.left() + TEXT_X, text_top), title, TEXT);
+        painter.galley(
+            pos2(card.left() + TEXT_X, text_top + title_height),
+            subtitle,
+            TEXT_SECONDARY,
+        );
+        let chevron = if self.theme_expanded {
+            self.icon(ICON_CHEVRON_UP, "˄", 12.0)
+        } else {
+            self.icon(ICON_CHEVRON_DOWN, "˅", 12.0)
+        };
+        let chevron = painter.layout_job(chevron);
+        painter.galley(
+            pos2(card.right() - 24.0, header.center().y) - chevron.size() / 2.0,
+            chevron,
+            TEXT,
+        );
+        if response.clicked() {
+            action = Some(SettingsAction::ToggleTheme);
+        }
+        if self.theme_expanded {
+            painter.hline(
+                card.x_range(),
+                header.bottom(),
+                Stroke::new(1.0, CARD_BORDER),
+            );
+            for (i, (theme, label)) in THEMES.into_iter().enumerate() {
+                let y = header.bottom() + MARGIN + (i as f32 + 0.5) * OPTION_HEIGHT;
+                let id = Id::new("theme").with(i);
+                if radio_button(
+                    ui,
+                    pos2(card.left() + TEXT_X, y),
+                    label,
+                    self.theme == theme,
+                    id,
+                ) {
+                    action = Some(SettingsAction::SetTheme(theme));
+                }
+            }
+        }
+
+        // About: the app's name, icon and version
+        section_label(&painter, pos2(left, top + about_y), "About");
+        let card = Rect::from_x_y_ranges(
+            left..=right,
+            top + about_top..=top + about_top + CARD_HEIGHT,
+        );
+        painter.rect_filled(card, RADIUS, CARD);
+        painter.rect_stroke(
+            card,
+            RADIUS,
+            Stroke::new(1.0, CARD_BORDER),
+            StrokeKind::Inside,
+        );
+        let icon = Rect::from_center_size(
+            pos2(card.left() + ICON_X, card.center().y),
+            vec2(16.0, 16.0),
+        );
+        let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+        painter.image(self.app_icon.id(), icon, uv, Color32::WHITE);
+        painter.text(
+            pos2(card.left() + TEXT_X, card.center().y),
+            Align2::LEFT_CENTER,
+            "CalcCraft",
+            body.clone(),
+            TEXT,
+        );
+        painter.text(
+            pos2(card.right() - 20.0, card.center().y),
+            Align2::RIGHT_CENTER,
+            env!("CARGO_PKG_VERSION"),
+            body.clone(),
+            TEXT_SECONDARY,
+        );
+
+        let feedback = pos2(left, top + feedback_y);
+        if link_button(ui, feedback, "Send feedback", Id::new("feedback")) {
+            action = Some(SettingsAction::OpenUrl(FEEDBACK_URL));
+        }
+
+        // A sentence with an inline link: find the link's glyphs to make them clickable.
+        let start = prefix.chars().count();
+        let link = char_range_rect(&contribute, start..start + link_text.chars().count());
+        let origin = pos2(left, top + contribute_top);
+        let response = ui
+            .interact(
+                link.translate(origin.to_vec2()),
+                Id::new("github"),
+                Sense::CLICK,
+            )
+            .on_hover_cursor(CursorIcon::PointingHand);
+        if response.is_pointer_button_down_on() {
+            contribute = paragraph(LINK_PRESSED);
+        } else if response.hovered() {
+            contribute = paragraph(LINK_HOVER);
+        }
+        painter.galley(origin, contribute, TEXT);
+        if response.clicked() {
+            action = Some(SettingsAction::OpenUrl(REPOSITORY_URL));
+        }
+        action
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SettingsAction {
+    ToggleTheme,
+    SetTheme(Theme),
+    OpenUrl(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -826,6 +1167,10 @@ impl eframe::App for CalculatorApp {
 
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, BACKGROUND);
+        if self.page == Page::Settings {
+            self.draw_settings(ui, full);
+            return;
+        }
 
         let header_height = if self.compact {
             COMPACT_HEADER_HEIGHT
@@ -914,6 +1259,100 @@ fn layout_elided_left(painter: &Painter, text: &str, font: FontId, max_width: f3
         );
     }
     galley
+}
+
+/// The bounding rectangle of the characters in `range`, relative to the galley.
+fn char_range_rect(galley: &Galley, range: std::ops::Range<usize>) -> Rect {
+    // Every character, spaces included, is one glyph in the rows.
+    let glyphs = galley.rows.iter().flat_map(|row| {
+        row.glyphs
+            .iter()
+            .map(|glyph| glyph.logical_rect().translate(row.pos.to_vec2()))
+    });
+    glyphs
+        .enumerate()
+        .filter(|(i, _)| range.contains(i))
+        .fold(Rect::NOTHING, |rect, (_, glyph)| rect.union(glyph))
+}
+
+// ------------------------------------------------------- settings controls
+
+/// Section heading on the Settings page, vertically centered on `left_center`.
+fn section_label(painter: &Painter, left_center: Pos2, label: &str) {
+    painter.text(
+        left_center,
+        Align2::LEFT_CENTER,
+        label,
+        FontId::new(14.0, semibold()),
+        TEXT,
+    );
+}
+
+/// WinUI-style radio button: a 20 pt circle whose left edge is at `left_center`, then the label.
+/// Returns `true` if it was clicked.
+fn radio_button(ui: &Ui, left_center: Pos2, label: &str, checked: bool, id: Id) -> bool {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(label.to_owned(), FontId::proportional(14.0), TEXT);
+    let text_pos = pos2(left_center.x + 28.0, left_center.y - galley.size().y / 2.0);
+    let rect = Rect::from_min_max(
+        pos2(left_center.x, left_center.y - 16.0),
+        pos2(text_pos.x + galley.size().x, left_center.y + 16.0),
+    );
+    let response = ui.interact(rect, id, Sense::CLICK);
+    let pressed = response.is_pointer_button_down_on();
+    let hovered = response.hovered();
+
+    let center = pos2(left_center.x + 10.0, left_center.y);
+    if checked || pressed {
+        let fill = if pressed {
+            ACCENT_PRESSED
+        } else if hovered {
+            ACCENT_HOVER
+        } else {
+            ACCENT
+        };
+        // The dot grows on hover and shrinks while pressed, as in WinUI.
+        let dot = if pressed {
+            5.0
+        } else if hovered {
+            7.0
+        } else {
+            6.0
+        };
+        painter.circle_filled(center, 10.0, fill);
+        painter.circle_filled(center, dot, RADIO_DOT);
+    } else {
+        let fill = if hovered { SUBTLE_HOVER } else { RADIO_FILL };
+        painter.circle(center, 9.5, fill, Stroke::new(1.0, RADIO_RING));
+    }
+    painter.galley(text_pos, galley, TEXT);
+    response.clicked()
+}
+
+/// A text link with a subtle background on hover, like a WinUI hyperlink button.
+/// The text starts at `left_center`. Returns `true` if it was clicked.
+fn link_button(ui: &Ui, left_center: Pos2, label: &str, id: Id) -> bool {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(
+        label.to_owned(),
+        FontId::proportional(14.0),
+        Color32::PLACEHOLDER,
+    );
+    let text_pos = pos2(left_center.x, left_center.y - galley.size().y / 2.0);
+    let rect = Rect::from_min_size(text_pos, galley.size()).expand2(vec2(4.0, 2.0));
+    let response = ui
+        .interact(rect, id, Sense::CLICK)
+        .on_hover_cursor(CursorIcon::PointingHand);
+    let (fill, color) = if response.is_pointer_button_down_on() {
+        (SUBTLE_PRESSED, LINK_PRESSED)
+    } else if response.hovered() {
+        (SUBTLE_HOVER, LINK_HOVER)
+    } else {
+        (Color32::TRANSPARENT, LINK)
+    };
+    painter.rect_filled(rect, RADIUS, fill);
+    painter.galley(text_pos, galley, color);
+    response.clicked()
 }
 
 /// Keys that arrive as text: digits and operators, as in Windows.
