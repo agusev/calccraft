@@ -13,10 +13,13 @@ fn main() -> eframe::Result {
             .with_inner_size([320.0, 500.0])
             .with_min_inner_size([280.0, 360.0])
             .with_icon(app::window_icon()),
+        // Settings are saved, but the window always opens at the default size.
+        persist_window: false,
         ..Default::default()
     };
+    // The app name also names the settings folder: %APPDATA%\CalcCraft.
     eframe::run_native(
-        "Calculator",
+        "CalcCraft",
         options,
         Box::new(|cc| Ok(Box::new(app::CalculatorApp::new(cc)))),
     )

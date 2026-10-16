@@ -1,4 +1,6 @@
-//! User interface styled after the Windows 11 calculator (dark theme).
+//! User interface styled after the Windows 11 calculator, in a dark or light theme.
+
+mod palette;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,38 +13,7 @@ use eframe::egui::{
 };
 
 use crate::engine::{Calculator, Command, Func, Op, format_number};
-
-// Colors sampled from a screenshot of the Windows 11 calculator.
-const BACKGROUND: Color32 = Color32::from_rgb(0x29, 0x1A, 0x29);
-const DIGIT: Color32 = Color32::from_rgb(0x43, 0x36, 0x44);
-const DIGIT_HOVER: Color32 = Color32::from_rgb(0x4B, 0x3E, 0x4C);
-const DIGIT_PRESSED: Color32 = Color32::from_rgb(0x3B, 0x2E, 0x3C);
-const OPERATOR: Color32 = Color32::from_rgb(0x3B, 0x2D, 0x3C);
-const OPERATOR_HOVER: Color32 = Color32::from_rgb(0x43, 0x36, 0x44);
-const OPERATOR_PRESSED: Color32 = Color32::from_rgb(0x35, 0x27, 0x35);
-const ACCENT: Color32 = Color32::from_rgb(0xDB, 0x9E, 0xE5);
-const ACCENT_HOVER: Color32 = Color32::from_rgb(0xC9, 0x91, 0xD3);
-const ACCENT_PRESSED: Color32 = Color32::from_rgb(0xB7, 0x84, 0xC1);
-const SUBTLE_HOVER: Color32 = Color32::from_rgb(0x35, 0x27, 0x35);
-const SUBTLE_PRESSED: Color32 = Color32::from_rgb(0x30, 0x22, 0x30);
-const BORDER: Color32 = Color32::from_rgb(0x38, 0x2A, 0x39);
-const FLYOUT: Color32 = Color32::from_rgb(0x2F, 0x21, 0x2F);
-const FLYOUT_BORDER: Color32 = Color32::from_rgb(0x45, 0x37, 0x45);
-const TEXT: Color32 = Color32::WHITE;
-const TEXT_PRESSED: Color32 = Color32::from_rgb(0xCF, 0xC8, 0xCF);
-const TEXT_SECONDARY: Color32 = Color32::from_rgb(0xC5, 0xBE, 0xC5);
-const TEXT_DISABLED: Color32 = Color32::from_rgb(0x6C, 0x62, 0x6D);
-const TEXT_ON_ACCENT: Color32 = Color32::from_rgb(0x1A, 0x0F, 0x1B);
-// Settings page.
-const CARD: Color32 = Color32::from_rgb(0x34, 0x26, 0x35);
-const CARD_BORDER: Color32 = Color32::from_rgb(0x22, 0x18, 0x25);
-const RADIO_RING: Color32 = Color32::from_rgb(0x9D, 0x97, 0x9F);
-const RADIO_FILL: Color32 = Color32::from_rgb(0x2C, 0x23, 0x33);
-const RADIO_DOT: Color32 = Color32::BLACK;
-const LINK: Color32 = Color32::from_rgb(0xF0, 0xC0, 0xF4);
-// Not sampled: the link color at 80% and 60% opacity over the background.
-const LINK_HOVER: Color32 = Color32::from_rgb(0xC8, 0x9F, 0xCC);
-const LINK_PRESSED: Color32 = Color32::from_rgb(0xA0, 0x7E, 0xA3);
+use palette::Palette;
 
 // Glyphs from the Segoe Fluent Icons / Segoe MDL2 Assets fonts.
 const ICON_MENU: char = '\u{E700}';
@@ -75,6 +46,8 @@ const KEY_FLASH: f64 = 0.1;
 
 const REPOSITORY_URL: &str = "https://github.com/gavrilov/calccraft";
 const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
+/// Storage key and values of the theme choice, the same as Windows uses.
+const THEME_KEY: &str = "SelectedAppTheme";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flyout {
@@ -91,12 +64,46 @@ enum Page {
     Settings,
 }
 
-/// The "App theme" choice. It is only remembered for now: the colors are always the dark ones.
+/// The "App theme" choice on the Settings page.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Theme {
     Light,
     Dark,
+    /// Follow the Windows app mode, and switch when it changes.
     System,
+}
+
+impl Theme {
+    /// The stored value, as Windows stores it (`Default` means "use system setting").
+    fn key(self) -> &'static str {
+        match self {
+            Theme::Light => "Light",
+            Theme::Dark => "Dark",
+            Theme::System => "Default",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Theme> {
+        [Theme::Light, Theme::Dark, Theme::System]
+            .into_iter()
+            .find(|theme| theme.key() == key)
+    }
+
+    fn preference(self) -> egui::ThemePreference {
+        match self {
+            Theme::Light => egui::ThemePreference::Light,
+            Theme::Dark => egui::ThemePreference::Dark,
+            Theme::System => egui::ThemePreference::System,
+        }
+    }
+}
+
+/// The palette for the theme egui resolved (the system one for `Theme::System`).
+fn palette_for(theme: egui::Theme) -> &'static Palette {
+    match theme {
+        egui::Theme::Dark => &palette::DARK,
+        egui::Theme::Light => &palette::LIGHT,
+    }
 }
 
 /// Button style.
@@ -121,6 +128,11 @@ pub struct CalculatorApp {
     key_flash: Option<(Command, f64)>,
     page: Page,
     theme: Theme,
+    /// Colors of the theme in effect, picked at the start of every frame.
+    palette: &'static Palette,
+    /// The theme the title bar was last colored for.
+    title_bar_theme: Option<egui::Theme>,
+    title_bar: TitleBar,
     /// Whether the "App theme" card on the Settings page shows its options.
     theme_expanded: bool,
     /// The window icon, shown in the About card.
@@ -129,10 +141,13 @@ pub struct CalculatorApp {
 
 impl CalculatorApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_theme(egui::Theme::Dark);
+        let theme = cc
+            .storage
+            .and_then(|storage| storage.get_string(THEME_KEY))
+            .and_then(|key| Theme::from_key(&key))
+            .unwrap_or(Theme::System);
+        cc.egui_ctx.set_theme(theme.preference());
         let has_icons = setup_fonts(&cc.egui_ctx);
-        #[cfg(windows)]
-        tint_title_bar(cc);
         let icon = window_icon();
         let app_icon = cc.egui_ctx.load_texture(
             "app-icon",
@@ -151,10 +166,18 @@ impl CalculatorApp {
             has_icons,
             key_flash: None,
             page: Page::Calculator,
-            theme: Theme::System,
+            theme,
+            palette: palette_for(cc.egui_ctx.theme()),
+            title_bar_theme: None,
+            title_bar: TitleBar::new(cc),
             theme_expanded: false,
             app_icon,
         }
+    }
+
+    fn set_theme(&mut self, ctx: &Context, theme: Theme) {
+        self.theme = theme;
+        ctx.set_theme(theme.preference());
     }
 
     // -------------------------------------------------------------- keyboard
@@ -286,6 +309,7 @@ impl CalculatorApp {
         label: LayoutJob,
         flash: bool,
     ) -> bool {
+        let p = self.palette;
         let sense = if enabled {
             Sense::CLICK
         } else {
@@ -305,26 +329,28 @@ impl CalculatorApp {
             }
         };
         let fill = match kind {
-            Kind::Digit => pick(DIGIT, DIGIT_HOVER, DIGIT_PRESSED),
-            Kind::Operator => pick(OPERATOR, OPERATOR_HOVER, OPERATOR_PRESSED),
-            Kind::Accent if !enabled => DIGIT,
-            Kind::Accent => pick(ACCENT, ACCENT_HOVER, ACCENT_PRESSED),
-            Kind::Subtle => pick(Color32::TRANSPARENT, SUBTLE_HOVER, SUBTLE_PRESSED),
+            Kind::Digit if !enabled => p.digit_disabled,
+            Kind::Digit => pick(p.digit, p.digit_hover, p.digit_pressed),
+            Kind::Operator if !enabled => p.operator_disabled,
+            Kind::Operator => pick(p.operator, p.operator_hover, p.operator_pressed),
+            Kind::Accent if !enabled => p.accent_disabled,
+            Kind::Accent => pick(p.accent, p.accent_hover, p.accent_pressed),
+            Kind::Subtle => pick(Color32::TRANSPARENT, p.subtle_hover, p.subtle_pressed),
         };
         let text = if !enabled {
-            TEXT_DISABLED
+            p.text_disabled
         } else if kind == Kind::Accent {
-            TEXT_ON_ACCENT
+            p.text_on_accent
         } else if pressed {
-            TEXT_PRESSED
+            p.text_pressed
         } else {
-            TEXT
+            p.text
         };
 
         let painter = ui.painter();
         painter.rect_filled(rect, RADIUS, fill);
         if matches!(kind, Kind::Digit | Kind::Operator) {
-            painter.rect_stroke(rect, RADIUS, Stroke::new(1.0, BORDER), StrokeKind::Inside);
+            painter.rect_stroke(rect, RADIUS, Stroke::new(1.0, p.border), StrokeKind::Inside);
         }
         let galley = painter.layout_job(label);
         painter.galley(rect.center() - galley.size() / 2.0, galley, text);
@@ -343,6 +369,7 @@ impl CalculatorApp {
     // ---------------------------------------------------------------- header
 
     fn draw_header(&mut self, ui: &Ui, rect: Rect) {
+        let p = self.palette;
         let ctx = ui.ctx().clone();
         let y = rect.center().y;
         let icon_button = |x: f32| Rect::from_center_size(pos2(x, y), vec2(40.0, 36.0));
@@ -379,7 +406,7 @@ impl CalculatorApp {
             Align2::LEFT_CENTER,
             "Standard",
             FontId::new(20.0, semibold()),
-            TEXT,
+            p.text,
         );
 
         let label = self.icon(ICON_KEEP_ON_TOP, "⇲", 14.0);
@@ -411,6 +438,7 @@ impl CalculatorApp {
     // --------------------------------------------------------------- display
 
     fn draw_display(&self, ui: &Ui, rect: Rect) {
+        let p = self.palette;
         let painter = ui.painter();
         let right = rect.right() - 12.0;
         let max_width = rect.width() - 24.0;
@@ -422,7 +450,7 @@ impl CalculatorApp {
             painter.galley(
                 pos2(right - galley.size().x, rect.top() + 6.0),
                 galley,
-                TEXT_SECONDARY,
+                p.text_secondary,
             );
         }
 
@@ -430,14 +458,14 @@ impl CalculatorApp {
         let display = self.calc.display();
         let base_size = (rect.height() * 0.46).clamp(28.0, 72.0);
         let mut galley =
-            painter.layout_no_wrap(display.clone(), FontId::new(base_size, semibold()), TEXT);
+            painter.layout_no_wrap(display.clone(), FontId::new(base_size, semibold()), p.text);
         if galley.size().x > max_width {
             let size = (base_size * max_width / galley.size().x).max(10.0);
-            galley = painter.layout_no_wrap(display, FontId::new(size, semibold()), TEXT);
+            galley = painter.layout_no_wrap(display, FontId::new(size, semibold()), p.text);
         }
         let center_y = rect.top() + rect.height() * 0.6;
         let pos = pos2(right - galley.size().x, center_y - galley.size().y / 2.0);
-        painter.galley(pos, galley, TEXT);
+        painter.galley(pos, galley, p.text);
     }
 
     // ------------------------------------------------------------ memory row
@@ -604,6 +632,7 @@ impl CalculatorApp {
     // ---------------------------------------------------- history and memory
 
     fn draw_flyout(&mut self, ui: &mut Ui, rect: Rect) {
+        let p = self.palette;
         let painter = ui.painter();
         let top = CornerRadius {
             nw: 8,
@@ -611,11 +640,11 @@ impl CalculatorApp {
             sw: 0,
             se: 0,
         };
-        painter.rect_filled(rect, top, FLYOUT);
+        painter.rect_filled(rect, top, p.flyout);
         painter.rect_stroke(
             rect.expand2(vec2(1.0, 0.0)),
             top,
-            Stroke::new(1.0, FLYOUT_BORDER),
+            Stroke::new(1.0, p.flyout_border),
             StrokeKind::Inside,
         );
         // Clicks on the panel's empty space must not fall through it.
@@ -638,7 +667,7 @@ impl CalculatorApp {
                 Align2::LEFT_TOP,
                 message,
                 FontId::new(14.0, semibold()),
-                TEXT,
+                p.text,
             );
             return;
         }
@@ -697,6 +726,7 @@ impl CalculatorApp {
 
     /// History entry: small expression, large result. Returns `true` on click.
     fn history_item(&self, ui: &mut Ui, index: usize) -> bool {
+        let p = self.palette;
         let entry = &self.calc.history()[index];
         let width = ui.available_width();
         let painter = ui.painter().clone();
@@ -716,7 +746,7 @@ impl CalculatorApp {
 
         let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::CLICK);
         if response.hovered() {
-            painter.rect_filled(rect, RADIUS, SUBTLE_HOVER);
+            painter.rect_filled(rect, RADIUS, p.subtle_hover);
         }
         let right = rect.right() - 12.0;
         let y = rect.top() + 10.0;
@@ -724,18 +754,19 @@ impl CalculatorApp {
         painter.galley(
             pos2(right - expression.size().x, y),
             expression,
-            TEXT_SECONDARY,
+            p.text_secondary,
         );
         painter.galley(
             pos2(right - result.size().x, y + expression_height),
             result,
-            TEXT,
+            p.text,
         );
         response.clicked()
     }
 
     /// Memory slot; on hover it shows MC, M+ and M− buttons.
     fn memory_item(&self, ui: &mut Ui, index: usize) -> Option<FlyoutAction> {
+        let p = self.palette;
         let value = &self.calc.memory()[index];
         let width = ui.available_width();
         let result = layout_elided_left(
@@ -750,14 +781,14 @@ impl CalculatorApp {
         let hovered = ui.rect_contains_pointer(rect);
         let painter = ui.painter();
         if hovered {
-            painter.rect_filled(rect, RADIUS, SUBTLE_HOVER);
+            painter.rect_filled(rect, RADIUS, p.subtle_hover);
         }
         let right = rect.right() - 12.0;
         let result_height = result.size().y;
         painter.galley(
             pos2(right - result.size().x, rect.top() + 10.0),
             result,
-            TEXT,
+            p.text,
         );
 
         let mut action = response
@@ -792,19 +823,20 @@ impl CalculatorApp {
     // ------------------------------------------------------------------ menu
 
     fn draw_navigation(&mut self, ui: &Ui, rect: Rect) {
+        let p = self.palette;
         let painter = ui.painter();
-        painter.rect_filled(rect, 0.0, Color32::from_black_alpha(90));
+        painter.rect_filled(rect, 0.0, p.backdrop);
         let backdrop = ui.interact(rect, Id::new("nav-backdrop"), Sense::CLICK);
 
         let panel = Rect::from_min_size(
             rect.min,
             vec2((rect.width() * 0.85).min(280.0), rect.height()),
         );
-        painter.rect_filled(panel, 0.0, FLYOUT);
+        painter.rect_filled(panel, 0.0, p.flyout);
         painter.vline(
             panel.right(),
             panel.y_range(),
-            Stroke::new(1.0, FLYOUT_BORDER),
+            Stroke::new(1.0, p.flyout_border),
         );
         ui.interact(panel, Id::new("nav-panel"), Sense::CLICK);
 
@@ -820,7 +852,7 @@ impl CalculatorApp {
             Align2::LEFT_TOP,
             "Calculator",
             FontId::new(14.0, semibold()),
-            TEXT,
+            p.text,
         );
         // The only mode is "Standard", and it is selected.
         let item = Rect::from_min_size(
@@ -838,7 +870,7 @@ impl CalculatorApp {
         painter.hline(
             panel.x_range(),
             item.top() - 12.0,
-            Stroke::new(1.0, FLYOUT_BORDER),
+            Stroke::new(1.0, p.flyout_border),
         );
         let icon = self.icon(ICON_SETTINGS, "⚙", 16.0);
         let settings = self.nav_item(ui, item, Id::new("nav-settings"), icon, "Settings", false);
@@ -862,12 +894,13 @@ impl CalculatorApp {
         label: &str,
         selected: bool,
     ) -> bool {
+        let p = self.palette;
         let painter = ui.painter();
         let response = ui.interact(rect, id, Sense::CLICK);
         let fill = if response.is_pointer_button_down_on() || (selected && !response.hovered()) {
-            SUBTLE_HOVER
+            p.subtle_hover
         } else if response.hovered() {
-            OPERATOR_HOVER
+            p.operator_hover
         } else {
             Color32::TRANSPARENT
         };
@@ -875,20 +908,20 @@ impl CalculatorApp {
         if selected {
             let pill =
                 Rect::from_center_size(pos2(rect.left() + 2.0, rect.center().y), vec2(3.0, 16.0));
-            painter.rect_filled(pill, 2.0, ACCENT);
+            painter.rect_filled(pill, 2.0, p.accent);
         }
         let icon = painter.layout_job(icon);
         painter.galley(
             pos2(rect.left() + 16.0, rect.center().y - icon.size().y / 2.0),
             icon,
-            TEXT,
+            p.text,
         );
         painter.text(
             pos2(rect.left() + 48.0, rect.center().y),
             Align2::LEFT_CENTER,
             label,
             FontId::proportional(14.0),
-            TEXT,
+            p.text,
         );
         response.clicked()
     }
@@ -896,6 +929,7 @@ impl CalculatorApp {
     // -------------------------------------------------------------- settings
 
     fn draw_settings(&mut self, ui: &mut Ui, rect: Rect) {
+        let p = self.palette;
         // Windows puts the back button in its own title bar. This app keeps the system title
         // bar, so the button takes the place of the menu button.
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER_HEIGHT));
@@ -919,7 +953,7 @@ impl CalculatorApp {
             Align2::LEFT_CENTER,
             "Settings",
             FontId::new(20.0, semibold()),
-            TEXT,
+            p.text,
         );
 
         let mut action = None;
@@ -934,7 +968,7 @@ impl CalculatorApp {
         );
         match action {
             Some(SettingsAction::ToggleTheme) => self.theme_expanded = !self.theme_expanded,
-            Some(SettingsAction::SetTheme(theme)) => self.theme = theme,
+            Some(SettingsAction::SetTheme(theme)) => self.set_theme(ui.ctx(), theme),
             Some(SettingsAction::OpenUrl(url)) => ui.ctx().open_url(egui::OpenUrl::new_tab(url)),
             None => {}
         }
@@ -942,6 +976,7 @@ impl CalculatorApp {
 
     /// The scrolling part of the Settings page: the Appearance and About sections and the links.
     fn settings_content(&self, ui: &mut Ui) -> Option<SettingsAction> {
+        let p = self.palette;
         // Distances measured on the Windows 11 Settings page.
         const SIDE: f32 = 24.0;
         const CARD_HEIGHT: f32 = 68.0;
@@ -961,11 +996,11 @@ impl CalculatorApp {
 
         // Lay out the text that wraps first: the page height depends on it.
         let text_width = width - 2.0 * SIDE - TEXT_X - 40.0;
-        let title = painter.layout("App theme".into(), body.clone(), TEXT, text_width);
+        let title = painter.layout("App theme".into(), body.clone(), p.text, text_width);
         let subtitle = painter.layout(
             "Select which app theme to display".into(),
             FontId::proportional(12.0),
-            TEXT_SECONDARY,
+            p.text_secondary,
             text_width,
         );
         let header_height = (title.size().y + subtitle.size().y + 32.0).max(CARD_HEIGHT);
@@ -979,12 +1014,12 @@ impl CalculatorApp {
         let paragraph = |link_color: Color32| {
             let mut job = LayoutJob::default();
             job.wrap.max_width = width - 2.0 * SIDE;
-            for (part, color) in [(prefix, TEXT), (link_text, link_color), (".", TEXT)] {
+            for (part, color) in [(prefix, p.text), (link_text, link_color), (".", p.text)] {
                 job.append(part, 0.0, TextFormat::simple(body.clone(), color));
             }
             painter.layout_job(job)
         };
-        let mut contribute = paragraph(LINK);
+        let mut contribute = paragraph(p.link);
         let row_height = contribute.rows.first().map_or(0.0, |row| row.size.y);
 
         // Vertical positions, from the top of the page body.
@@ -1002,18 +1037,18 @@ impl CalculatorApp {
         let mut action = None;
 
         // Appearance: the App theme card expands to show the three choices.
-        section_label(&painter, pos2(left, top + appearance_y), "Appearance");
+        section_label(p, &painter, pos2(left, top + appearance_y), "Appearance");
         let card = Rect::from_x_y_ranges(left..=right, top + theme_top..=top + theme_bottom);
         let header = card.with_max_y(card.top() + header_height);
         let response = ui.interact(header, Id::new("theme-card"), Sense::CLICK);
         let fill = if response.is_pointer_button_down_on() {
-            SUBTLE_PRESSED
+            p.card_pressed
         } else if response.hovered() {
-            OPERATOR
+            p.card_hover
         } else {
-            CARD
+            p.card
         };
-        painter.rect_filled(card, RADIUS, CARD);
+        painter.rect_filled(card, RADIUS, p.card);
         let corners = if self.theme_expanded {
             CornerRadius {
                 nw: 4,
@@ -1028,22 +1063,22 @@ impl CalculatorApp {
         painter.rect_stroke(
             card,
             RADIUS,
-            Stroke::new(1.0, CARD_BORDER),
+            Stroke::new(1.0, p.card_border),
             StrokeKind::Inside,
         );
         let icon = painter.layout_job(self.icon(ICON_THEME, "◐", 20.0));
         painter.galley(
             pos2(card.left() + ICON_X, header.center().y) - icon.size() / 2.0,
             icon,
-            TEXT,
+            p.text,
         );
         let text_top = header.center().y - (title.size().y + subtitle.size().y) / 2.0;
         let title_height = title.size().y;
-        painter.galley(pos2(card.left() + TEXT_X, text_top), title, TEXT);
+        painter.galley(pos2(card.left() + TEXT_X, text_top), title, p.text);
         painter.galley(
             pos2(card.left() + TEXT_X, text_top + title_height),
             subtitle,
-            TEXT_SECONDARY,
+            p.text_secondary,
         );
         let chevron = if self.theme_expanded {
             self.icon(ICON_CHEVRON_UP, "˄", 12.0)
@@ -1054,7 +1089,7 @@ impl CalculatorApp {
         painter.galley(
             pos2(card.right() - 24.0, header.center().y) - chevron.size() / 2.0,
             chevron,
-            TEXT,
+            p.text,
         );
         if response.clicked() {
             action = Some(SettingsAction::ToggleTheme);
@@ -1063,12 +1098,13 @@ impl CalculatorApp {
             painter.hline(
                 card.x_range(),
                 header.bottom(),
-                Stroke::new(1.0, CARD_BORDER),
+                Stroke::new(1.0, p.card_border),
             );
             for (i, (theme, label)) in THEMES.into_iter().enumerate() {
                 let y = header.bottom() + MARGIN + (i as f32 + 0.5) * OPTION_HEIGHT;
                 let id = Id::new("theme").with(i);
                 if radio_button(
+                    p,
                     ui,
                     pos2(card.left() + TEXT_X, y),
                     label,
@@ -1081,16 +1117,16 @@ impl CalculatorApp {
         }
 
         // About: the app's name, icon and version
-        section_label(&painter, pos2(left, top + about_y), "About");
+        section_label(p, &painter, pos2(left, top + about_y), "About");
         let card = Rect::from_x_y_ranges(
             left..=right,
             top + about_top..=top + about_top + CARD_HEIGHT,
         );
-        painter.rect_filled(card, RADIUS, CARD);
+        painter.rect_filled(card, RADIUS, p.card);
         painter.rect_stroke(
             card,
             RADIUS,
-            Stroke::new(1.0, CARD_BORDER),
+            Stroke::new(1.0, p.card_border),
             StrokeKind::Inside,
         );
         let icon = Rect::from_center_size(
@@ -1104,18 +1140,18 @@ impl CalculatorApp {
             Align2::LEFT_CENTER,
             "CalcCraft",
             body.clone(),
-            TEXT,
+            p.text,
         );
         painter.text(
             pos2(card.right() - 20.0, card.center().y),
             Align2::RIGHT_CENTER,
             env!("CARGO_PKG_VERSION"),
             body.clone(),
-            TEXT_SECONDARY,
+            p.text_secondary,
         );
 
         let feedback = pos2(left, top + feedback_y);
-        if link_button(ui, feedback, "Send feedback", Id::new("feedback")) {
+        if link_button(p, ui, feedback, "Send feedback", Id::new("feedback")) {
             action = Some(SettingsAction::OpenUrl(FEEDBACK_URL));
         }
 
@@ -1131,11 +1167,11 @@ impl CalculatorApp {
             )
             .on_hover_cursor(CursorIcon::PointingHand);
         if response.is_pointer_button_down_on() {
-            contribute = paragraph(LINK_PRESSED);
+            contribute = paragraph(p.link_pressed);
         } else if response.hovered() {
-            contribute = paragraph(LINK_HOVER);
+            contribute = paragraph(p.link_hover);
         }
-        painter.galley(origin, contribute, TEXT);
+        painter.galley(origin, contribute, p.text);
         if response.clicked() {
             action = Some(SettingsAction::OpenUrl(REPOSITORY_URL));
         }
@@ -1160,13 +1196,24 @@ enum FlyoutAction {
 }
 
 impl eframe::App for CalculatorApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(THEME_KEY, self.theme.key().to_owned());
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // egui resolves "Use system setting" and reports when Windows switches modes.
+        let theme = ctx.theme();
+        self.palette = palette_for(theme);
+        if self.title_bar_theme != Some(theme) {
+            self.title_bar.apply(theme);
+            self.title_bar_theme = Some(theme);
+        }
         self.handle_keyboard(&ctx);
         let now = ctx.input(|i| i.time);
 
         let full = ui.max_rect();
-        ui.painter().rect_filled(full, 0.0, BACKGROUND);
+        ui.painter().rect_filled(full, 0.0, self.palette.background);
         if self.page == Page::Settings {
             self.draw_settings(ui, full);
             return;
@@ -1278,21 +1325,28 @@ fn char_range_rect(galley: &Galley, range: std::ops::Range<usize>) -> Rect {
 // ------------------------------------------------------- settings controls
 
 /// Section heading on the Settings page, vertically centered on `left_center`.
-fn section_label(painter: &Painter, left_center: Pos2, label: &str) {
+fn section_label(p: &Palette, painter: &Painter, left_center: Pos2, label: &str) {
     painter.text(
         left_center,
         Align2::LEFT_CENTER,
         label,
         FontId::new(14.0, semibold()),
-        TEXT,
+        p.text,
     );
 }
 
 /// WinUI-style radio button: a 20 pt circle whose left edge is at `left_center`, then the label.
 /// Returns `true` if it was clicked.
-fn radio_button(ui: &Ui, left_center: Pos2, label: &str, checked: bool, id: Id) -> bool {
+fn radio_button(
+    p: &Palette,
+    ui: &Ui,
+    left_center: Pos2,
+    label: &str,
+    checked: bool,
+    id: Id,
+) -> bool {
     let painter = ui.painter();
-    let galley = painter.layout_no_wrap(label.to_owned(), FontId::proportional(14.0), TEXT);
+    let galley = painter.layout_no_wrap(label.to_owned(), FontId::proportional(14.0), p.text);
     let text_pos = pos2(left_center.x + 28.0, left_center.y - galley.size().y / 2.0);
     let rect = Rect::from_min_max(
         pos2(left_center.x, left_center.y - 16.0),
@@ -1305,11 +1359,11 @@ fn radio_button(ui: &Ui, left_center: Pos2, label: &str, checked: bool, id: Id) 
     let center = pos2(left_center.x + 10.0, left_center.y);
     if checked || pressed {
         let fill = if pressed {
-            ACCENT_PRESSED
+            p.accent_pressed
         } else if hovered {
-            ACCENT_HOVER
+            p.accent_hover
         } else {
-            ACCENT
+            p.accent
         };
         // The dot grows on hover and shrinks while pressed, as in WinUI.
         let dot = if pressed {
@@ -1320,18 +1374,22 @@ fn radio_button(ui: &Ui, left_center: Pos2, label: &str, checked: bool, id: Id) 
             6.0
         };
         painter.circle_filled(center, 10.0, fill);
-        painter.circle_filled(center, dot, RADIO_DOT);
+        painter.circle_filled(center, dot, p.radio_dot);
     } else {
-        let fill = if hovered { SUBTLE_HOVER } else { RADIO_FILL };
-        painter.circle(center, 9.5, fill, Stroke::new(1.0, RADIO_RING));
+        let fill = if hovered {
+            p.subtle_hover
+        } else {
+            p.radio_fill
+        };
+        painter.circle(center, 9.5, fill, Stroke::new(1.0, p.radio_ring));
     }
-    painter.galley(text_pos, galley, TEXT);
+    painter.galley(text_pos, galley, p.text);
     response.clicked()
 }
 
 /// A text link with a subtle background on hover, like a WinUI hyperlink button.
 /// The text starts at `left_center`. Returns `true` if it was clicked.
-fn link_button(ui: &Ui, left_center: Pos2, label: &str, id: Id) -> bool {
+fn link_button(p: &Palette, ui: &Ui, left_center: Pos2, label: &str, id: Id) -> bool {
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(
         label.to_owned(),
@@ -1344,11 +1402,11 @@ fn link_button(ui: &Ui, left_center: Pos2, label: &str, id: Id) -> bool {
         .interact(rect, id, Sense::CLICK)
         .on_hover_cursor(CursorIcon::PointingHand);
     let (fill, color) = if response.is_pointer_button_down_on() {
-        (SUBTLE_PRESSED, LINK_PRESSED)
+        (p.subtle_pressed, p.link_pressed)
     } else if response.hovered() {
-        (SUBTLE_HOVER, LINK_HOVER)
+        (p.subtle_hover, p.link_hover)
     } else {
-        (Color32::TRANSPARENT, LINK)
+        (Color32::TRANSPARENT, p.link)
     };
     painter.rect_filled(rect, RADIUS, fill);
     painter.galley(text_pos, galley, color);
@@ -1409,36 +1467,61 @@ fn setup_fonts(ctx: &Context) -> bool {
     has_icons
 }
 
-/// Tints the system title bar with the background color, like the Windows 11 calculator.
-#[cfg(windows)]
-fn tint_title_bar(cc: &eframe::CreationContext<'_>) {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows_sys::Win32::Graphics::Dwm::{
-        DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
-    };
+/// The system title bar. Like the Windows 11 calculator, the app tints it with
+/// the background color and switches its buttons between dark and light.
+struct TitleBar {
+    /// The native window handle (an `HWND`), if there is one.
+    #[cfg(windows)]
+    hwnd: Option<isize>,
+}
 
-    let Ok(handle) = cc.window_handle() else {
-        return;
-    };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return;
-    };
-    let hwnd = handle.hwnd.get() as windows_sys::Win32::Foundation::HWND;
-    let dark_mode: i32 = 1;
-    // COLORREF stores the color as 0x00BBGGRR.
-    let [r, g, b, _] = BACKGROUND.to_array();
-    let caption = u32::from_le_bytes([r, g, b, 0]);
-    // SAFETY: hwnd is eframe's live window; the pointers point to local u32/i32 values of the right size.
-    unsafe {
-        let set = |attribute: i32, value: *const u32| {
-            DwmSetWindowAttribute(hwnd, attribute as u32, value.cast(), 4);
-        };
-        set(
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            (&dark_mode as *const i32).cast(),
-        );
-        set(DWMWA_CAPTION_COLOR, &caption);
+impl TitleBar {
+    #[cfg(windows)]
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let hwnd = cc
+            .window_handle()
+            .ok()
+            .and_then(|handle| match handle.as_raw() {
+                RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+                _ => None,
+            });
+        Self { hwnd }
     }
+
+    #[cfg(not(windows))]
+    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self {}
+    }
+
+    #[cfg(windows)]
+    fn apply(&self, theme: egui::Theme) {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+        };
+
+        let Some(hwnd) = self.hwnd else {
+            return;
+        };
+        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+        let dark_mode = u32::from(theme == egui::Theme::Dark);
+        // COLORREF stores the color as 0x00BBGGRR.
+        let [r, g, b, _] = palette_for(theme).background.to_array();
+        let caption = u32::from_le_bytes([r, g, b, 0]);
+        // SAFETY: hwnd is eframe's window, which lives as long as the app; the pointers point
+        // to local u32 values, the size both attributes expect.
+        unsafe {
+            let set = |attribute: i32, value: &u32| {
+                DwmSetWindowAttribute(hwnd, attribute as u32, (value as *const u32).cast(), 4);
+            };
+            set(DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode);
+            set(DWMWA_CAPTION_COLOR, &caption);
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn apply(&self, _theme: egui::Theme) {}
 }
 
 /// Window icon: a small calculator drawn pixel by pixel.
@@ -1464,20 +1547,20 @@ pub fn window_icon() -> egui::IconData {
             return Color32::TRANSPARENT;
         }
         if inside(x, y, screen, 2.0) {
-            return ACCENT;
+            return palette::DARK.accent;
         }
         for row in 0..4 {
             for col in 0..3 {
                 if inside(x, y, key(row, col), 1.5) {
                     return if (row, col) == (3, 2) {
-                        ACCENT
+                        palette::DARK.accent
                     } else {
                         Color32::from_gray(0xE6)
                     };
                 }
             }
         }
-        DIGIT
+        palette::DARK.digit
     };
 
     // Anti-aliasing: 4×4 samples per pixel.
