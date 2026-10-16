@@ -45,10 +45,19 @@ impl Equation {
     /// Parses a line. A bare expression is y = expression, as in Windows.
     pub fn parse(text: &str, syntax: Syntax) -> Result<Equation, SyntaxError> {
         let parsed = parse::parse(text, syntax)?;
+        // y, or a function's name `f(x)`, which the parser reads as f · x. Only the name
+        // counts: `ax = 3` is the line x = 3/a.
+        let [left_fx, right_fx] = parsed.names_function;
         let (shape, relation) = match parsed.right {
             None if parsed.left.has_y() => return Err(SyntaxError::InvalidEquationSyntax),
             None => (Shape::Function(parsed.left), Relation::Equal),
-            Some((relation, right)) => classify(parsed.left, relation, right)?,
+            Some((relation, right)) => {
+                let is_y = [
+                    left_fx || parsed.left == Expr::Y,
+                    right_fx || right == Expr::Y,
+                ];
+                classify(parsed.left, relation, right, is_y)?
+            }
         };
         let variables = match &shape {
             Shape::Function(e) | Shape::Inverse(e) | Shape::Implicit(e) => e.variables(),
@@ -65,23 +74,17 @@ impl Equation {
     }
 }
 
-/// Whether `e` stands for y on the left of a definition: `y`, or `f(x)` (which the
-/// parser reads as f · x).
-fn is_y(e: &Expr) -> bool {
-    match e {
-        Expr::Y => true,
-        Expr::Bin(expr::BinOp::Mul, a, b) => {
-            matches!((&**a, &**b), (Expr::Var(_), Expr::X))
-        }
-        _ => false,
-    }
-}
-
-fn classify(left: Expr, relation: Relation, right: Expr) -> Result<(Shape, Relation), SyntaxError> {
-    if is_y(&left) && !right.has_y() {
+/// Sorts `left` (relation) `right` into a shape; `is_y` tells which sides stand for y.
+fn classify(
+    left: Expr,
+    relation: Relation,
+    right: Expr,
+    is_y: [bool; 2],
+) -> Result<(Shape, Relation), SyntaxError> {
+    if is_y[0] && !right.has_y() {
         return Ok((Shape::Function(right), relation));
     }
-    if is_y(&right) && !left.has_y() {
+    if is_y[1] && !left.has_y() {
         return Ok((Shape::Function(left), relation.flip()));
     }
     if left == Expr::X && !right.has_x() {
@@ -119,6 +122,24 @@ mod tests {
         // `2 < y` is `y > 2`.
         assert_eq!(shape("2<y").1, Relation::Greater);
         assert_eq!(shape("y<sin(x)").1, Relation::Less);
+        assert!(matches!(shape("x^2=g(x)").0, Shape::Function(_)));
+    }
+
+    #[test]
+    fn a_product_with_x_is_no_function_name() {
+        // `ax = 3` is a·x = 3 (the line x = 3/a), not f(x) = 3.
+        let e = Equation::parse("ax=3", Syntax::default()).unwrap();
+        assert!(matches!(e.shape, Shape::Implicit(_)), "{:?}", e.shape);
+        assert_eq!(e.variables, vec!['a']);
+        let e = Equation::parse("3=bx", Syntax::default()).unwrap();
+        assert!(matches!(e.shape, Shape::Implicit(_)), "{:?}", e.shape);
+        // `f(x) = x²` defines y.
+        let e = Equation::parse("f(x)=x^2", Syntax::default()).unwrap();
+        assert_eq!(
+            e.shape,
+            Equation::parse("x^2", Syntax::default()).unwrap().shape
+        );
+        assert!(e.variables.is_empty());
     }
 
     #[test]

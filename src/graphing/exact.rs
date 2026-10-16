@@ -25,7 +25,8 @@ pub enum Exact {
     Decimal(f64),
 }
 
-fn gcd(a: i64, b: i64) -> i64 {
+/// The greatest common divisor (the analysis reduces periods with it too).
+pub(super) fn gcd(a: i64, b: i64) -> i64 {
     if b == 0 { a.abs() } else { gcd(b, a % b) }
 }
 

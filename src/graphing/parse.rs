@@ -7,7 +7,7 @@
 //! parentheses (`sin x`, `sin 2x`), `|x|`, `x!`, `²` and the Unicode operators. The errors
 //! are the engine's `SyntaxErrorCode`s that the calculator has messages for.
 
-use super::expr::{BinOp, Expr, Func};
+use super::expr::{BinOp, Expr, Func, MAX_DEPTH};
 
 /// How numbers are written: the region's decimal separator, and the separator of a
 /// function's arguments (Windows' `LocalizationType`: `,` and `;` with a decimal comma).
@@ -130,7 +130,21 @@ impl SyntaxError {
 pub struct Parsed {
     pub left: Expr,
     pub right: Option<(Relation, Expr)>,
+    /// Whether the left and the right side are written `f(x)`, a letter and x in
+    /// parentheses: a function's name (`f(x) = x²`), though its expression is the product
+    /// f · x, like `fx` or `ax`.
+    pub names_function: [bool; 2],
 }
+
+/// The most characters a line can have: Windows' equation boxes have a `MaxLength` of
+/// 2048. Only pasting gets more into them here, which this keeps from building
+/// expressions too large to evaluate.
+const MAX_LENGTH: usize = 2048;
+
+/// The most levels of parentheses, bars, functions, signs and exponents inside each
+/// other: the parser recurses through several functions for each, on the UI thread's 1 MB
+/// stack (2047 `(` overflowed it). The expression is also kept within `MAX_DEPTH`.
+const MAX_NESTING: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Tok {
@@ -348,6 +362,8 @@ struct Parser {
     at: usize,
     /// How many `|…|` are open: a bar then closes one instead of starting another.
     bars: usize,
+    /// How many levels deep the parser is (`MAX_NESTING`).
+    nesting: usize,
 }
 
 impl Parser {
@@ -423,14 +439,21 @@ impl Parser {
         }
     }
 
+    /// A signed power. Every level of nesting passes through here, which counts them.
     fn unary(&mut self) -> Result<Expr, SyntaxError> {
-        if self.eat(&Tok::Minus) {
-            return Ok(Expr::Neg(Box::new(self.unary()?)));
+        if self.nesting == MAX_NESTING {
+            return Err(SyntaxError::InvalidEquationSyntax);
         }
-        if self.eat(&Tok::Plus) {
-            return self.unary();
-        }
-        self.power()
+        self.nesting += 1;
+        let e = if self.eat(&Tok::Minus) {
+            Expr::Neg(Box::new(self.unary()?))
+        } else if self.eat(&Tok::Plus) {
+            self.unary()?
+        } else {
+            self.power()?
+        };
+        self.nesting -= 1;
+        Ok(e)
     }
 
     /// A power binds tighter than a sign: `-x^2` is −(x²), and `2^-x` is allowed.
@@ -569,6 +592,11 @@ impl Parser {
 
 /// Parses one line of the equation list.
 pub fn parse(text: &str, syntax: Syntax) -> Result<Parsed, SyntaxError> {
+    // Text too long or too deep to evaluate gets the generic error: Windows has no syntax
+    // error for it, and its engine's "too complex" errors aren't syntax errors.
+    if text.chars().count() > MAX_LENGTH {
+        return Err(SyntaxError::InvalidEquationSyntax);
+    }
     let tokens = tokenize(text, syntax)?;
     if tokens.is_empty() {
         return Err(SyntaxError::EmptyExpression);
@@ -577,8 +605,10 @@ pub fn parse(text: &str, syntax: Syntax) -> Result<Parsed, SyntaxError> {
         tokens,
         at: 0,
         bars: 0,
+        nesting: 0,
     };
     let left = parser.sum()?;
+    let left_end = parser.at;
     let mut right = None;
     if let Some(Tok::Rel(relation)) = parser.peek().cloned() {
         parser.at += 1;
@@ -595,10 +625,25 @@ pub fn parse(text: &str, syntax: Syntax) -> Result<Parsed, SyntaxError> {
         }
     }
     match parser.peek() {
-        None => Ok(Parsed { left, right }),
-        Some(Tok::Close) => Err(SyntaxError::ParenthesisMismatch),
-        Some(_) => Err(SyntaxError::UnexpectedToken),
+        None => {}
+        Some(Tok::Close) => return Err(SyntaxError::ParenthesisMismatch),
+        Some(_) => return Err(SyntaxError::UnexpectedToken),
     }
+    // Long chains (`x + x + …`, `xxx…`) are deep without nesting.
+    if left.depth() > MAX_DEPTH || right.as_ref().is_some_and(|(_, e)| e.depth() > MAX_DEPTH) {
+        return Err(SyntaxError::InvalidEquationSyntax);
+    }
+    let names_function =
+        |tokens: &[Tok]| matches!(tokens, [Tok::Var(_), Tok::Open, Tok::X, Tok::Close]);
+    let tokens = &parser.tokens;
+    Ok(Parsed {
+        left,
+        right,
+        names_function: [
+            names_function(&tokens[..left_end]),
+            names_function(tokens.get(left_end + 1..).unwrap_or_default()),
+        ],
+    })
 }
 
 #[cfg(test)]
@@ -706,5 +751,59 @@ mod tests {
         assert_eq!(error("sin(x, 2)"), SyntaxError::IncorrectNumParameter);
         assert_eq!(error("y=ix"), SyntaxError::CannotUseIInReal);
         assert_eq!(error("   "), SyntaxError::EmptyExpression);
+    }
+
+    #[test]
+    fn function_names() {
+        let names = |text: &str| parse(text, Syntax::default()).unwrap().names_function;
+        assert_eq!(names("f(x)=x^2"), [true, false]);
+        assert_eq!(names("x^2 = g (x)"), [false, true]);
+        assert_eq!(names("f(x)"), [true, false]);
+        // Products, not names.
+        assert_eq!(names("ax=3"), [false, false]);
+        assert_eq!(names("f·x=3"), [false, false]);
+        assert_eq!(names("f(x+1)=3"), [false, false]);
+        assert_eq!(names("2f(x)=3"), [false, false]);
+    }
+
+    /// Runs `f` on a thread with the 1 MB stack of the UI thread (the main thread on
+    /// Windows), where too deep a recursion crashes the app.
+    fn on_ui_sized_stack(f: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn limits() {
+        on_ui_sized_stack(|| {
+            // Deep nesting is an error instead of a stack overflow.
+            assert_eq!(error(&"(".repeat(2047)), SyntaxError::InvalidEquationSyntax);
+            let nested = |n: usize| format!("{}x{}", "(".repeat(n), ")".repeat(n));
+            assert_eq!(error(&nested(64)), SyntaxError::InvalidEquationSyntax);
+            assert_eq!(value(&nested(63), 2.0), 2.0);
+            assert_eq!(value("((((x))))", 3.0), 3.0);
+            assert_eq!(error(&"√".repeat(300)), SyntaxError::InvalidEquationSyntax);
+            assert_eq!(error(&"-".repeat(100)), SyntaxError::InvalidEquationSyntax);
+            assert_eq!(value(&format!("{}x", "√".repeat(30)), 1.0), 1.0);
+            // So are long chains, which are deep without nesting.
+            assert_eq!(error(&"x".repeat(2048)), SyntaxError::InvalidEquationSyntax);
+            assert_eq!(
+                error(&format!("x{}", "!".repeat(2047))),
+                SyntaxError::InvalidEquationSyntax
+            );
+            assert_eq!(
+                error(&format!("{}x", "x+".repeat(100))),
+                SyntaxError::InvalidEquationSyntax
+            );
+            assert_eq!(value(&format!("{}x", "x+".repeat(90)), 1.0), 91.0);
+            // Text longer than the box holds (pasted) is too.
+            let long = format!("x{}", " ".repeat(2048));
+            assert_eq!(error(&long), SyntaxError::InvalidEquationSyntax);
+            assert_eq!(value(&long[..2048], 5.0), 5.0);
+        });
     }
 }

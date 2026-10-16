@@ -8,6 +8,15 @@
 use crate::engine::Angle;
 use std::f64::consts::{LN_10, PI};
 
+/// The most levels an expression may have. Evaluating, copying and deriving recurse once
+/// per level, on the UI thread's 1 MB stack: a box full of `xxx…` (2048 levels) overflowed
+/// it. The parser refuses deeper expressions, and `derivative` deeper derivatives.
+pub const MAX_DEPTH: usize = 100;
+
+/// The most nodes a derivative may have. Derivatives grow fast (f″ of x · x · … · x has
+/// about n³ nodes for n factors), and the analysis evaluates them thousands of times.
+const MAX_DERIVATIVE_SIZE: usize = 1000;
+
 /// The functions of one argument (the keypad's and a few common spellings).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Func {
@@ -235,6 +244,102 @@ fn call(f: Func, a: Expr) -> Expr {
     Expr::Call(f, Box::new(a))
 }
 
+/// The derivative of `f` at `u`, with `k` radians per angle unit. It is a function of
+/// its own to keep `Expr::derive`'s stack frame small: a debug build gives that frame
+/// room for every arm's temporaries, and `derive` recurses once per level of the tree.
+fn outer_derivative(f: Func, u: Expr, k: f64) -> Expr {
+    use BinOp::*;
+    use Expr::*;
+    let sq = |e: Expr| bin(Pow, e, Num(2.0));
+    let kk = || Num(k);
+    match f {
+        Func::Sin => bin(Mul, kk(), call(Func::Cos, u)),
+        Func::Cos => Neg(Box::new(bin(Mul, kk(), call(Func::Sin, u)))),
+        Func::Tan => bin(Mul, kk(), sq(call(Func::Sec, u))),
+        Func::Sec => bin(
+            Mul,
+            kk(),
+            bin(Mul, call(Func::Sec, u.clone()), call(Func::Tan, u)),
+        ),
+        Func::Csc => Neg(Box::new(bin(
+            Mul,
+            kk(),
+            bin(Mul, call(Func::Csc, u.clone()), call(Func::Cot, u)),
+        ))),
+        Func::Cot => Neg(Box::new(bin(Mul, kk(), sq(call(Func::Csc, u))))),
+        Func::Asin => bin(
+            Div,
+            Num(1.0),
+            bin(Mul, kk(), call(Func::Sqrt, bin(Sub, Num(1.0), sq(u)))),
+        ),
+        Func::Acos => Neg(Box::new(bin(
+            Div,
+            Num(1.0),
+            bin(Mul, kk(), call(Func::Sqrt, bin(Sub, Num(1.0), sq(u)))),
+        ))),
+        Func::Atan => bin(Div, Num(1.0), bin(Mul, kk(), bin(Add, Num(1.0), sq(u)))),
+        Func::Acot => Neg(Box::new(bin(
+            Div,
+            Num(1.0),
+            bin(Mul, kk(), bin(Add, Num(1.0), sq(u))),
+        ))),
+        Func::Asec | Func::Acsc => {
+            let d = bin(
+                Div,
+                Num(1.0),
+                bin(
+                    Mul,
+                    kk(),
+                    bin(
+                        Mul,
+                        call(Func::Abs, u.clone()),
+                        call(Func::Sqrt, bin(Sub, sq(u), Num(1.0))),
+                    ),
+                ),
+            );
+            if f == Func::Asec { d } else { Neg(Box::new(d)) }
+        }
+        Func::Sinh => call(Func::Cosh, u),
+        Func::Cosh => call(Func::Sinh, u),
+        Func::Tanh => sq(call(Func::Sech, u)),
+        Func::Sech => Neg(Box::new(bin(
+            Mul,
+            call(Func::Sech, u.clone()),
+            call(Func::Tanh, u),
+        ))),
+        Func::Csch => Neg(Box::new(bin(
+            Mul,
+            call(Func::Csch, u.clone()),
+            call(Func::Coth, u),
+        ))),
+        Func::Coth => Neg(Box::new(sq(call(Func::Csch, u)))),
+        Func::Asinh => bin(Div, Num(1.0), call(Func::Sqrt, bin(Add, sq(u), Num(1.0)))),
+        Func::Acosh => bin(Div, Num(1.0), call(Func::Sqrt, bin(Sub, sq(u), Num(1.0)))),
+        Func::Atanh | Func::Acoth => bin(Div, Num(1.0), bin(Sub, Num(1.0), sq(u))),
+        Func::Asech => Neg(Box::new(bin(
+            Div,
+            Num(1.0),
+            bin(Mul, u.clone(), call(Func::Sqrt, bin(Sub, Num(1.0), sq(u)))),
+        ))),
+        Func::Acsch => Neg(Box::new(bin(
+            Div,
+            Num(1.0),
+            bin(
+                Mul,
+                call(Func::Abs, u.clone()),
+                call(Func::Sqrt, bin(Add, Num(1.0), sq(u))),
+            ),
+        ))),
+        Func::Abs => call(Func::Sign, u),
+        Func::Floor | Func::Ceil | Func::Sign => Num(0.0),
+        Func::Sqrt => bin(Div, Num(1.0), bin(Mul, Num(2.0), call(Func::Sqrt, u))),
+        Func::Cbrt => bin(Div, Num(1.0), bin(Mul, Num(3.0), sq(call(Func::Cbrt, u)))),
+        Func::Ln => bin(Div, Num(1.0), u),
+        Func::Log => bin(Div, Num(1.0), bin(Mul, u, Num(LN_10))),
+        Func::Exp => call(Func::Exp, u),
+    }
+}
+
 impl Expr {
     /// The value at (x, y).
     pub fn eval(&self, x: f64, y: f64, env: &Env) -> f64 {
@@ -330,10 +435,35 @@ impl Expr {
         }
     }
 
+    /// The number of nodes.
+    pub fn size(&self) -> usize {
+        match self {
+            Expr::Neg(a) | Expr::Call(_, a) | Expr::Factorial(a) => 1 + a.size(),
+            Expr::Bin(_, a, b) | Expr::Root(a, b) | Expr::LogBase(a, b) => 1 + a.size() + b.size(),
+            _ => 1,
+        }
+    }
+
+    /// The number of levels: 1 for a number or a variable.
+    pub fn depth(&self) -> usize {
+        match self {
+            Expr::Neg(a) | Expr::Call(_, a) | Expr::Factorial(a) => 1 + a.depth(),
+            Expr::Bin(_, a, b) | Expr::Root(a, b) | Expr::LogBase(a, b) => {
+                1 + a.depth().max(b.depth())
+            }
+            _ => 1,
+        }
+    }
+
     /// The derivative by x (y counts as a constant), in the angle unit `angle`, or
-    /// `None` for factorials, which have no simple one.
+    /// `None` for factorials, which have no simple one, and when it (or the expression)
+    /// is too large to use (`MAX_DERIVATIVE_SIZE`, `MAX_DEPTH`).
     pub fn derivative(&self, angle: Angle) -> Option<Expr> {
-        Some(self.derive(angle)?.simplify())
+        let fits = |e: &Expr| e.size() <= MAX_DERIVATIVE_SIZE && e.depth() <= MAX_DEPTH;
+        if !fits(self) {
+            return None;
+        }
+        Some(self.derive(angle)?.simplify()).filter(fits)
     }
 
     fn derive(&self, angle: Angle) -> Option<Expr> {
@@ -393,104 +523,12 @@ impl Expr {
                     )
                 }
             }
-            Call(f, a) => {
-                let u = (**a).clone();
-                let du = a.derive(angle)?;
-                let sq = |e: Expr| bin(Pow, e, Num(2.0));
-                let kk = || Num(k);
-                // The derivative of f at u, times u'.
-                let outer = match f {
-                    Func::Sin => bin(Mul, kk(), call(Func::Cos, u)),
-                    Func::Cos => Neg(Box::new(bin(Mul, kk(), call(Func::Sin, u)))),
-                    Func::Tan => bin(Mul, kk(), sq(call(Func::Sec, u))),
-                    Func::Sec => bin(
-                        Mul,
-                        kk(),
-                        bin(Mul, call(Func::Sec, u.clone()), call(Func::Tan, u)),
-                    ),
-                    Func::Csc => Neg(Box::new(bin(
-                        Mul,
-                        kk(),
-                        bin(Mul, call(Func::Csc, u.clone()), call(Func::Cot, u)),
-                    ))),
-                    Func::Cot => Neg(Box::new(bin(Mul, kk(), sq(call(Func::Csc, u))))),
-                    Func::Asin => bin(
-                        Div,
-                        Num(1.0),
-                        bin(Mul, kk(), call(Func::Sqrt, bin(Sub, Num(1.0), sq(u)))),
-                    ),
-                    Func::Acos => Neg(Box::new(bin(
-                        Div,
-                        Num(1.0),
-                        bin(Mul, kk(), call(Func::Sqrt, bin(Sub, Num(1.0), sq(u)))),
-                    ))),
-                    Func::Atan => bin(Div, Num(1.0), bin(Mul, kk(), bin(Add, Num(1.0), sq(u)))),
-                    Func::Acot => Neg(Box::new(bin(
-                        Div,
-                        Num(1.0),
-                        bin(Mul, kk(), bin(Add, Num(1.0), sq(u))),
-                    ))),
-                    Func::Asec | Func::Acsc => {
-                        let d = bin(
-                            Div,
-                            Num(1.0),
-                            bin(
-                                Mul,
-                                kk(),
-                                bin(
-                                    Mul,
-                                    call(Func::Abs, u.clone()),
-                                    call(Func::Sqrt, bin(Sub, sq(u), Num(1.0))),
-                                ),
-                            ),
-                        );
-                        if *f == Func::Asec {
-                            d
-                        } else {
-                            Neg(Box::new(d))
-                        }
-                    }
-                    Func::Sinh => call(Func::Cosh, u),
-                    Func::Cosh => call(Func::Sinh, u),
-                    Func::Tanh => sq(call(Func::Sech, u)),
-                    Func::Sech => Neg(Box::new(bin(
-                        Mul,
-                        call(Func::Sech, u.clone()),
-                        call(Func::Tanh, u),
-                    ))),
-                    Func::Csch => Neg(Box::new(bin(
-                        Mul,
-                        call(Func::Csch, u.clone()),
-                        call(Func::Coth, u),
-                    ))),
-                    Func::Coth => Neg(Box::new(sq(call(Func::Csch, u)))),
-                    Func::Asinh => bin(Div, Num(1.0), call(Func::Sqrt, bin(Add, sq(u), Num(1.0)))),
-                    Func::Acosh => bin(Div, Num(1.0), call(Func::Sqrt, bin(Sub, sq(u), Num(1.0)))),
-                    Func::Atanh | Func::Acoth => bin(Div, Num(1.0), bin(Sub, Num(1.0), sq(u))),
-                    Func::Asech => Neg(Box::new(bin(
-                        Div,
-                        Num(1.0),
-                        bin(Mul, u.clone(), call(Func::Sqrt, bin(Sub, Num(1.0), sq(u)))),
-                    ))),
-                    Func::Acsch => Neg(Box::new(bin(
-                        Div,
-                        Num(1.0),
-                        bin(
-                            Mul,
-                            call(Func::Abs, u.clone()),
-                            call(Func::Sqrt, bin(Add, Num(1.0), sq(u))),
-                        ),
-                    ))),
-                    Func::Abs => call(Func::Sign, u),
-                    Func::Floor | Func::Ceil | Func::Sign => Num(0.0),
-                    Func::Sqrt => bin(Div, Num(1.0), bin(Mul, Num(2.0), call(Func::Sqrt, u))),
-                    Func::Cbrt => bin(Div, Num(1.0), bin(Mul, Num(3.0), sq(call(Func::Cbrt, u)))),
-                    Func::Ln => bin(Div, Num(1.0), u),
-                    Func::Log => bin(Div, Num(1.0), bin(Mul, u, Num(LN_10))),
-                    Func::Exp => call(Func::Exp, u),
-                };
-                bin(Mul, outer, du)
-            }
+            // The derivative of f at u, times u'.
+            Call(f, a) => bin(
+                Mul,
+                outer_derivative(*f, (**a).clone(), k),
+                a.derive(angle)?,
+            ),
             Root(a, n) => {
                 if n.has_x() {
                     // root(a, n) = a^(1/n)
@@ -622,6 +660,36 @@ mod tests {
                 .derivative(Angle::Radians)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn sizes() {
+        let e = bin(BinOp::Add, call(Func::Sin, x()), Expr::Num(1.0));
+        assert_eq!((e.size(), e.depth()), (4, 3));
+    }
+
+    #[test]
+    fn large_derivatives_are_skipped() {
+        // x · x · … · x with 60 factors: f′ has thousands of nodes and f″ millions,
+        // which froze the analysis for minutes.
+        let mut product = x();
+        for _ in 1..60 {
+            product = bin(BinOp::Mul, product, x());
+        }
+        assert!(product.derivative(Angle::Radians).is_none());
+        // √√…√x 300 times is too deep to derive.
+        let mut roots = x();
+        for _ in 0..300 {
+            roots = call(Func::Sqrt, roots);
+        }
+        assert!(roots.derivative(Angle::Radians).is_none());
+        // A few factors still have their derivatives.
+        let cube = bin(BinOp::Mul, bin(BinOp::Mul, x(), x()), x());
+        let d2 = cube
+            .derivative(Angle::Radians)
+            .and_then(|d| d.derivative(Angle::Radians))
+            .unwrap();
+        assert_eq!(d2.eval(2.0, 0.0, &Env::RADIANS), 12.0);
     }
 
     #[test]
