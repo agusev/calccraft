@@ -13,7 +13,7 @@ use super::icons::{ICON_BACKSPACE, ICON_CHEVRON_DOWN, icon_label};
 use super::strings::{tr, tr_format, unit_abbreviation, unit_name};
 use super::{
     CalculatorApp, Flyout, GAP, KEY_FLASH, Kind, MARGIN, RADIUS, access, layout_elided_left, light,
-    negate_label, numbers, semibold, symbols, text,
+    negate_label, numbers, repaint_for_flash, semibold, symbols, text,
 };
 use crate::converter::{Converter, ConverterCommand, Region};
 
@@ -166,8 +166,9 @@ impl CalculatorApp {
     pub(super) fn handle_converter_keyboard(&mut self, ctx: &Context) {
         let now = ctx.input(|i| i.time);
         for event in ctx.input(|i| i.events.clone()) {
-            // An open drop-down takes the keyboard; Esc closes it.
-            if self.converter.popup.is_some() {
+            // An open drop-down or menu takes the keyboard (Windows' `HonorShortcuts(false)`
+            // while the menu is open); Esc closes it.
+            if self.converter.popup_open() || self.flyout == Flyout::Navigation {
                 if matches!(
                     event,
                     Event::Key {
@@ -175,8 +176,9 @@ impl CalculatorApp {
                         pressed: true,
                         ..
                     }
-                ) {
-                    self.converter.close_popup();
+                ) && !self.converter.close_popup()
+                {
+                    self.flyout = Flyout::None;
                 }
                 continue;
             }
@@ -218,9 +220,7 @@ impl CalculatorApp {
                 _ => {}
             }
         }
-        if self.converter.flash.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(KEY_FLASH));
-        }
+        repaint_for_flash(ctx, &mut self.converter.flash, now);
     }
 
     fn converter_press(&mut self, command: ConverterCommand, now: f64) {

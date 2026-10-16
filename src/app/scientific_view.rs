@@ -202,13 +202,16 @@ impl ScientificState {
             Key::U => return trig(TrigFunction::Sec),
             Key::I => return trig(TrigFunction::Csc),
             Key::J => return trig(TrigFunction::Cot),
-            Key::F3 => return Some(Command::Angle(Angle::Degrees)),
-            Key::F4 => return Some(Command::Angle(Angle::Radians)),
-            Key::F5 => return Some(Command::Angle(Angle::Gradians)),
             _ => {}
         }
         Some(match (ctrl, shift, key) {
-            (false, false, Key::X) => Command::Exponent,
+            // Windows' Shift and Ctrl shortcuts have no function keys.
+            (false, false, Key::F3) => Command::Angle(Angle::Degrees),
+            (false, false, Key::F4) => Command::Angle(Angle::Radians),
+            (false, false, Key::F5) => Command::Angle(Angle::Gradians),
+            // The `exp` button has both: the constructor of `CalculatorScientificOperators`
+            // adds `E` to the resources' `X`, and the shortcut manager keeps both.
+            (false, false, Key::X | Key::E) => Command::Exponent,
             (false, false, Key::M) => Command::Function(Func::Dms),
             (false, false, Key::V) => Command::ToggleNotation,
             (false, false, Key::R) => Command::Function(Func::Reciprocal),
@@ -294,7 +297,7 @@ impl CalculatorApp {
             // Windows makes the list as high as the keys (`RowHeight =
             // NumpadPanel.ActualHeight`): the unit, F-E and memory rows stay in view, the
             // memory buttons disabled, and a click on them closes it (`OnHistoryFlyOutTapped`).
-            self.draw_memory_row_enabled(ui, memory_row, now, false);
+            self.draw_memory_row(ui, memory_row, now, false);
             let above = Rect::from_min_max(area.min, memory_row.right_bottom());
             if ui
                 .interact(above, Id::new("display"), Sense::CLICK)
@@ -313,7 +316,7 @@ impl CalculatorApp {
         if !self.docked {
             self.context_menu = None;
         }
-        self.draw_memory_row(ui, memory_row, now);
+        self.draw_memory_row(ui, memory_row, now, true);
         // `Margin="3,0,3,3"` around the keys.
         let keypad = Rect::from_min_max(
             keypad.min + vec2(MARGIN - 1.0, 0.0),
@@ -611,18 +614,11 @@ impl CalculatorApp {
         label: LayoutJob,
         name: &str,
     ) -> bool {
-        if !on {
-            // Off, it looks like any operator key, but tells Narrator it's a toggle.
-            let p = self.palette;
-            let info = access::item(WidgetType::Checkbox, name, false);
-            let response = access::control(ui, p, rect, id, enabled, RADIUS, info);
-            self.paint_key(ui, rect, Kind::Operator, enabled, &response, false, label);
-            return enabled && response.clicked();
-        }
-        let p = self.palette;
-        let info = access::item(WidgetType::Checkbox, name, true);
-        let response = access::control(ui, p, rect, id, enabled, RADIUS, info);
-        self.paint_key(ui, rect, Kind::Accent, enabled, &response, false, label);
+        // Off, it looks like any operator key, but tells Narrator it's a toggle.
+        let kind = if on { Kind::Accent } else { Kind::Operator };
+        let info = access::item(WidgetType::Checkbox, name, on);
+        let response = access::control(ui, self.palette, rect, id, enabled, RADIUS, info);
+        self.paint_key(ui, rect, kind, enabled, &response, false, label);
         enabled && response.clicked()
     }
 
@@ -973,6 +969,9 @@ mod tests {
         );
         assert_eq!(key(Key::P, Modifiers::NONE), Some(Command::Pi));
         assert_eq!(key(Key::E, Modifiers::SHIFT), Some(Command::Euler));
+        assert_eq!(key(Key::E, Modifiers::NONE), Some(Command::Exponent));
+        assert_eq!(key(Key::X, Modifiers::NONE), Some(Command::Exponent));
+        assert_eq!(key(Key::F4, Modifiers::SHIFT), None);
         assert_eq!(key(Key::R, Modifiers::SHIFT), Some(Command::Random));
         assert_eq!(
             key(Key::Y, Modifiers::COMMAND),

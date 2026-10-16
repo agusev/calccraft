@@ -161,9 +161,10 @@ struct ComboCard {
 }
 
 impl ComboCard {
-    /// From a card's left edge to its text, as in the App theme card.
-    const TEXT_X: f32 = 58.0;
+    /// From a card's left edge to the center of its icon and to its text, in every
+    /// Settings card.
     const ICON_X: f32 = 28.0;
+    const TEXT_X: f32 = 58.0;
     const PADDING: f32 = 16.0;
     const BOX_HEIGHT: f32 = 32.0;
     /// The box's room for its chevron, right of the value.
@@ -641,10 +642,11 @@ impl CalculatorApp {
     /// in keep-on-top mode or with `AltGr`, which arrives as `Ctrl+Alt`. The keys are
     /// consumed, so the mode that opens doesn't also type the digit.
     fn handle_mode_keys(&mut self, ctx: &Context) {
+        // Taken in every state, so that no Alt chord types its digit.
+        let chosen = ctx.input_mut(|input| take_mode_shortcut(&mut input.events));
         if self.compact || self.page != Page::Calculator {
             return;
         }
-        let chosen = ctx.input_mut(|input| take_mode_shortcut(&mut input.events));
         if let Some(mode) = chosen
             && mode != self.mode
         {
@@ -706,7 +708,7 @@ impl CalculatorApp {
         let now = ctx.input(|i| i.time);
         for event in events {
             match event {
-                Event::Text(text) if !covered => {
+                Event::Text(text) if !covered && !self.keypad_disabled() => {
                     let commands: Vec<Command> = match self.mode {
                         Mode::Programmer => text
                             .chars()
@@ -741,10 +743,13 @@ impl CalculatorApp {
                 _ => {}
             }
         }
-        // The button highlighted by a key press has to be turned off again.
-        if self.key_flash.is_some() {
-            ctx.request_repaint_after(Duration::from_secs_f64(KEY_FLASH));
-        }
+        repaint_for_flash(ctx, &mut self.key_flash, now);
+    }
+
+    /// An open history or memory flyout disables the keypad and the memory buttons
+    /// (`EnableControls(false)`), so their keys do nothing.
+    fn keypad_disabled(&self) -> bool {
+        matches!(self.flyout, Flyout::History | Flyout::Memory)
     }
 
     fn handle_key(&mut self, ctx: &Context, key: Key, modifiers: Modifiers, now: f64) {
@@ -756,22 +761,29 @@ impl CalculatorApp {
         let command = if let Some(command) = scientific {
             command
         } else if modifiers.command {
-            match key {
-                Key::M => Command::MemoryStore,
-                Key::P => Command::MemoryAdd,
-                Key::Q => Command::MemorySubtract,
-                Key::R => Command::MemoryRecall,
-                Key::L => Command::MemoryClear,
+            // Keep on top hides the history and disables the memory buttons, and Windows
+            // turns their shortcuts off (`AreHistoryShortcutsEnabled`).
+            if self.compact {
+                return;
+            }
+            // Windows' Ctrl+Shift shortcuts are only Ctrl+Shift+D and the Scientific
+            // mode's letters.
+            match (key, modifiers.shift) {
+                (Key::M, false) => Command::MemoryStore,
+                (Key::P, false) => Command::MemoryAdd,
+                (Key::Q, false) => Command::MemorySubtract,
+                (Key::R, false) => Command::MemoryRecall,
+                (Key::L, false) => Command::MemoryClear,
                 // The Programmer mode has no history.
-                Key::H | Key::D if programmer => return,
+                (Key::H | Key::D, _) if programmer => return,
                 // The docked panel already shows the history, so Windows ignores it then.
-                Key::H if self.docked => return,
-                Key::H => return self.toggle_flyout(Flyout::History),
-                Key::D if modifiers.shift => return self.engine_mut().clear_history(),
+                (Key::H, false) if self.docked => return,
+                (Key::H, false) => return self.toggle_flyout(Flyout::History),
+                (Key::D, true) => return self.engine_mut().clear_history(),
                 _ => return,
             }
-        } else if let Some(command) = programmer
-            .then(|| programmer_view::ProgrammerState::key_command(key))
+        } else if let Some(command) = (programmer && modifiers.is_none())
+            .then(|| self.programmer.key_command(key))
             .flatten()
         {
             command
@@ -804,7 +816,9 @@ impl CalculatorApp {
                 _ => return,
             }
         };
-        self.press(command, now);
+        if !self.keypad_disabled() {
+            self.press(command, now);
+        }
     }
 
     fn press(&mut self, command: Command, now: f64) {
@@ -1067,7 +1081,9 @@ impl CalculatorApp {
         let calc = self.engine();
 
         let expression = numbers().localize_expression(&calc.expression());
-        if !expression.is_empty() {
+        // Keep on top shows only the result (`DisplayModeAlwaysOnTop` sets the expression
+        // row's height to 0).
+        if !expression.is_empty() && !self.compact {
             let galley =
                 layout_elided_left(painter, &expression, FontId::proportional(14.0), max_width);
             let pos = pos2(right - galley.size().x, expression_top);
@@ -1106,14 +1122,9 @@ impl CalculatorApp {
 
     // ------------------------------------------------------------ memory row
 
-    fn draw_memory_row(&mut self, ui: &Ui, rect: Rect, now: f64) {
-        self.draw_memory_row_enabled(ui, rect, now, true);
-    }
-
-    /// The memory row, with its buttons disabled when `enabled` is false (while a
+    /// The memory row, with its buttons disabled when `all_enabled` is false (while a
     /// Scientific flyout covers the keys, Windows' `EnableMemoryControls(false)`).
-    fn draw_memory_row_enabled(&mut self, ui: &Ui, rect: Rect, now: f64, enabled: bool) {
-        let all_enabled = enabled;
+    fn draw_memory_row(&mut self, ui: &Ui, rect: Rect, now: f64, all_enabled: bool) {
         let buttons = [
             ("MC", Command::MemoryClear),
             ("MR", Command::MemoryRecall),
@@ -1431,6 +1442,8 @@ impl CalculatorApp {
             action = self.draw_context_menu(ui, menu);
         }
 
+        // The context menu covers the list, so an action while it's open comes from it.
+        let from_menu = self.context_menu.is_some();
         if action.is_some() {
             self.context_menu = None;
         }
@@ -1444,7 +1457,14 @@ impl CalculatorApp {
                 self.flyout = Flyout::None;
             }
             Some(FlyoutAction::MemoryAdd(i, subtract)) => self.engine_mut().memory_add(i, subtract),
-            Some(FlyoutAction::MemoryClear(i)) => self.engine_mut().memory_clear_item(i),
+            Some(FlyoutAction::MemoryClear(i)) => {
+                self.engine_mut().memory_clear_item(i);
+                // Clearing the last item from its context menu closes the flyout
+                // (`MemoryEmptied`); the item's own MC button leaves it open, as in Windows.
+                if from_menu && self.engine().memory().is_empty() && self.flyout == Flyout::Memory {
+                    self.flyout = Flyout::None;
+                }
+            }
             Some(FlyoutAction::ClearAll) if history => self.engine_mut().clear_history(),
             Some(FlyoutAction::ClearAll) => self.engine_mut().execute(Command::MemoryClear),
             Some(FlyoutAction::OpenMenu(target, pos)) => {
@@ -1983,9 +2003,8 @@ impl CalculatorApp {
         // Distances measured on the Windows 11 Settings page.
         const SIDE: f32 = 24.0;
         const CARD_HEIGHT: f32 = 68.0;
-        // From a card's left edge to the center of its icon and to its text.
-        const ICON_X: f32 = 28.0;
-        const TEXT_X: f32 = 58.0;
+        const ICON_X: f32 = ComboCard::ICON_X;
+        const TEXT_X: f32 = ComboCard::TEXT_X;
         const OPTION_HEIGHT: f32 = 40.0;
         // The themes and their labels' resource keys.
         const THEMES: [(Theme, &str); 3] = [
@@ -2650,7 +2669,7 @@ impl CalculatorApp {
                     self.context_menu = None;
                 }
                 if !self.compact {
-                    self.draw_memory_row(ui, memory_row, now);
+                    self.draw_memory_row(ui, memory_row, now, true);
                 }
                 self.draw_keypad(ui, keypad, now);
             }
@@ -2889,9 +2908,23 @@ fn link_button(p: &Palette, ui: &Ui, left_center: Pos2, label: &str, id: Id) -> 
     response.clicked()
 }
 
+/// Repaints until the key that a key press highlights is drawn plain again, then forgets
+/// the press, so an idle window doesn't repaint.
+fn repaint_for_flash<C>(ctx: &Context, flash: &mut Option<(C, f64)>, now: f64) {
+    let Some(at) = flash.as_ref().map(|&(_, at)| at) else {
+        return;
+    };
+    let left = at + KEY_FLASH - now;
+    if left > 0.0 {
+        ctx.request_repaint_after(Duration::from_secs_f64(left));
+    } else {
+        *flash = None;
+    }
+}
+
 /// Removes the mode shortcuts (`Alt` + digit, `Ctrl+E`) from `events` and returns the
 /// mode the first one opens. `Ctrl+Alt` is `AltGr`, which types characters, so it's left
-/// alone. Text that comes with a shortcut's digit goes too.
+/// alone. Text that comes with any `Alt` chord goes too.
 fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
     let mut chosen = None;
     let mut consumed = false;
@@ -2901,14 +2934,18 @@ fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
             pressed,
             modifiers,
             ..
-        } if modifiers.alt && !modifiers.ctrl => match Mode::for_alt_key(*key) {
-            Some(mode) => {
-                chosen = chosen.or(pressed.then_some(mode));
-                consumed = true;
-                false
+        } if modifiers.alt && !modifiers.ctrl => {
+            // In Windows an Alt chord is a system key and types nothing, but egui-winit
+            // still sends the key's text along.
+            consumed |= *pressed;
+            match Mode::for_alt_key(*key) {
+                Some(mode) => {
+                    chosen = chosen.or(pressed.then_some(mode));
+                    false
+                }
+                None => true,
             }
-            None => true,
-        },
+        }
         Event::Key {
             key: Key::E,
             pressed,
@@ -3242,10 +3279,11 @@ mod tests {
         assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Graphing));
         assert!(events.is_empty());
 
-        // Alt+6 is no mode.
-        let mut events = vec![key(Key::Num6, Modifiers::ALT)];
+        // Alt+6 is no mode, and types nothing either.
+        let mut events = vec![key(Key::Num6, Modifiers::ALT), Event::Text("6".into())];
         assert_eq!(take_mode_shortcut(&mut events), None);
         assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], Event::Key { .. }));
     }
 
     #[test]

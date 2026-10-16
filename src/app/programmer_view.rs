@@ -176,8 +176,8 @@ impl ProgrammerState {
     /// The function keys: F5 to F8 pick the radix, F2, F3, F4 and F12 the word size
     /// (the shortcuts of the four word size buttons, which Windows triggers even while
     /// they're hidden: each one switches to the next size).
-    pub(super) fn key_command(key: Key) -> Option<Command> {
-        Some(match key {
+    pub(super) fn key_command(&self, key: Key) -> Option<Command> {
+        let command = match key {
             Key::F5 => Command::Radix(Radix::Hex),
             Key::F6 => Command::Radix(Radix::Decimal),
             Key::F7 => Command::Radix(Radix::Octal),
@@ -187,7 +187,16 @@ impl ProgrammerState {
             Key::F4 => Command::WordSize(WordSize::Byte),
             Key::F12 => Command::WordSize(WordSize::Qword),
             _ => return None,
-        })
+        };
+        // The radix and word size already chosen do nothing (and don't finish the number
+        // being typed): the radix's radio button is already checked, and Windows'
+        // `ValueBitLength` only acts on a change.
+        let chosen = match command {
+            Command::Radix(radix) => self.calc.radix() == Some(radix),
+            Command::WordSize(word) => self.calc.word_size() == Some(word),
+            _ => false,
+        };
+        (!chosen).then_some(command)
     }
 }
 
@@ -1120,20 +1129,24 @@ mod tests {
 
     #[test]
     fn function_keys() {
-        assert_eq!(
-            ProgrammerState::key_command(Key::F5),
-            Some(Command::Radix(Radix::Hex))
-        );
+        let mut state = ProgrammerState::new();
+        assert_eq!(state.key_command(Key::F5), Some(Command::Radix(Radix::Hex)));
         // Each word size key belongs to a button that switches to the next size.
         assert_eq!(
-            ProgrammerState::key_command(Key::F2),
+            state.key_command(Key::F2),
             Some(Command::WordSize(WordSize::Dword))
         );
+        assert_eq!(state.key_command(Key::F9), None);
+
+        // The radix and word size already chosen (DEC and QWORD) do nothing, so typing
+        // goes on: 12, F6, 3 is 123, as in Windows.
+        assert_eq!(state.key_command(Key::F6), None);
+        assert_eq!(state.key_command(Key::F12), None);
+        state.calc.execute(Command::WordSize(WordSize::Byte));
         assert_eq!(
-            ProgrammerState::key_command(Key::F12),
+            state.key_command(Key::F12),
             Some(Command::WordSize(WordSize::Qword))
         );
-        assert_eq!(ProgrammerState::key_command(Key::F9), None);
     }
 
     #[test]
