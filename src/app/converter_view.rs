@@ -91,6 +91,18 @@ fn is_converter_key(id: Id) -> bool {
     (0..15).any(|i| id == Id::new("converter-key").with(i))
 }
 
+/// The resource keys of what a screen reader calls a field's value and its unit picker:
+/// "Convert from %1 %2" and "Input unit" for the field being typed into, "Converts into
+/// %1 %2" and "Output unit" for the other. Windows swaps them when the other field becomes
+/// the active one (`UnitConverterViewModel::OnSwitchActive`).
+fn automation_keys(converter: &Converter, top: bool) -> (&'static str, &'static str) {
+    if converter.value1_active() == top {
+        ("Format_ValueFrom", "InputUnit_Name")
+    } else {
+        ("Format_ValueTo", "OutputUnit_Name")
+    }
+}
+
 /// The name a screen reader gives a key of the converter's keypad.
 fn command_name(command: ConverterCommand) -> &'static str {
     tr(match command {
@@ -368,19 +380,16 @@ impl CalculatorApp {
         let pos = pos2(left, rect.bottom() - margin - galley.size().y);
         painter.galley(pos, galley, p.text);
 
-        // "Convert from 5 Kilometers", "Converts into 3.106856 Miles"; like Windows, screen
-        // readers read the bottom value out when it changes.
+        // "Convert from 5 Kilometers" for the value being typed into, "Converts into
+        // 3.106856 Miles" for the other; like Windows, screen readers read the bottom value
+        // out when it changes.
         let unit = if top {
             converter.unit1()
         } else {
             converter.unit2()
         };
         let unit = unit_name(converter.units()[unit].key);
-        let format = if top {
-            "Format_ValueFrom"
-        } else {
-            "Format_ValueTo"
-        };
+        let (format, _) = automation_keys(converter, top);
         let name = tr_format(format, &[&value, unit]);
         let id = Id::new("converter-value").with(top);
         let info = || WidgetInfo::labeled(WidgetType::Button, true, &name);
@@ -413,12 +422,8 @@ impl CalculatorApp {
         let width = 4.0 + label.size().x + 8.0 + chevron.size().x + 12.0;
         let rect = Rect::from_min_size(pos2(row.left() + 12.0, row.top()), vec2(width, height));
 
-        let picker = if top {
-            tr("InputUnit_Name")
-        } else {
-            tr("OutputUnit_Name")
-        };
-        let info = access::combo_box(picker, name);
+        let (_, picker) = automation_keys(converter, top);
+        let info = access::combo_box(tr(picker), name);
         let id = unit_picker_id(top);
         let response = access::control(ui, p, rect, id, true, RADIUS, info);
         let color = if response.is_pointer_button_down_on() {
@@ -727,6 +732,22 @@ mod tests {
         // Too little room: the minimums win and the last row shrinks.
         let rows = star_rows(100.0, &[(56.0, 56.0), (32.0, 32.0), (360.0, 0.0)]);
         assert_eq!(rows, [56.0, 32.0, 12.0]);
+    }
+
+    #[test]
+    fn automation_names_follow_the_active_field() {
+        let from = ("Format_ValueFrom", "InputUnit_Name");
+        let into = ("Format_ValueTo", "OutputUnit_Name");
+        let mut converter = Converter::new(Region::new("US"));
+        assert_eq!(automation_keys(&converter, true), from);
+        assert_eq!(automation_keys(&converter, false), into);
+        // Typing into the bottom value makes it the source, and Windows swaps the names.
+        converter.activate(false);
+        assert_eq!(automation_keys(&converter, true), into);
+        assert_eq!(automation_keys(&converter, false), from);
+        converter.activate(true);
+        assert_eq!(automation_keys(&converter, true), from);
+        assert_eq!(automation_keys(&converter, false), into);
     }
 
     #[test]
