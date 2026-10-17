@@ -519,7 +519,8 @@ These come from the Windows Calculator source and calc.exe, and are pinned by th
   of them (a fourth for 2s): 10 and 2 for x from −27 to 27, 5 and 1 for y from −3 to 30.
 - The wheel zooms by 15 % a notch around the pointer; the buttons by 1.0625 from the center.
 - The tracer rounds x to 10^(⌊log₁₀ x range⌋ − 3) and shows y with 15 decimals:
-  `(3.82, 14.592400000000000)`.
+  `(3.82, 14.592400000000000)`. A value that rounds to 0 has no sign, as .NET Native writes it:
+  `(0, 0.000000000000000)` just left of the origin on y = x.
 - The keypad's keys type `GetButtonOutput`'s text: `sin()` with the cursor inside, `root(x,n)`
   with the n selected, `log(b, x)` with the b selected, `^2`, `10^`, `1/`.
 - The analysis of the manual tests' functions, word for word: domain `{x ∈ ℝ}`, `{x ≠ 0}`,
