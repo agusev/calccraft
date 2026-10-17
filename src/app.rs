@@ -85,6 +85,9 @@ const REPOSITORY_URL: &str = "https://github.com/gavrilov/calccraft";
 const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
 /// Storage key and values of the theme choice, the same as Windows uses.
 const THEME_KEY: &str = "SelectedAppTheme";
+/// Storage key of the mode the app was closed in, the same as Windows uses
+/// (`ApplicationViewModel.Mode`); the value is `Mode::serialization_id`.
+const MODE_KEY: &str = "Mode";
 /// Storage key of the last converter and its units, the same as Windows uses.
 const CONVERTER_KEY: &str = "UnitConverterPreferences";
 /// Storage keys of the Language and Regional format choices, which Windows doesn't have:
@@ -310,6 +313,42 @@ impl Mode {
     fn has_history(self) -> bool {
         matches!(self, Mode::Standard | Mode::Scientific)
     }
+
+    /// Windows' id of the mode, `NavCategory`'s `SerializationId`: Windows saves it as its
+    /// `Mode` setting to open in that mode next time. The ids never change; 16 is the
+    /// Currency converter, which CalcCraft doesn't have.
+    fn serialization_id(self) -> i32 {
+        match self {
+            Mode::Standard => 0,
+            Mode::Scientific => 1,
+            Mode::Programmer => 2,
+            Mode::DateCalculation => 3,
+            Mode::Converter(category) => match category {
+                Category::Volume => 4,
+                Category::Length => 5,
+                Category::Weight => 6,
+                Category::Temperature => 7,
+                Category::Energy => 8,
+                Category::Area => 9,
+                Category::Speed => 10,
+                Category::Time => 11,
+                Category::Power => 12,
+                Category::Data => 13,
+                Category::Pressure => 14,
+                Category::Angle => 15,
+            },
+            Mode::Graphing => 17,
+        }
+    }
+
+    /// The mode with that `serialization_id`, if CalcCraft has it
+    /// (`NavCategoryStates.Deserialize`).
+    fn from_serialization_id(id: i32) -> Option<Mode> {
+        Mode::CALCULATORS
+            .into_iter()
+            .chain(Category::ALL.map(Mode::Converter))
+            .find(|mode| mode.serialization_id() == id)
+    }
 }
 
 /// What fills the window: the calculator or, as in Windows, the Settings page instead.
@@ -472,10 +511,16 @@ impl CalculatorApp {
             .storage
             .and_then(|s| s.get_string(graphing_view::THEME_KEY))
             .is_some_and(|v| v == "true");
+        let mode = cc
+            .storage
+            .and_then(|s| s.get_string(MODE_KEY))
+            .and_then(|id| id.parse().ok())
+            .and_then(Mode::from_serialization_id)
+            .unwrap_or(Mode::Standard);
         // Ctrl with plus, minus and 0 zoom the graph, not the whole window, and Windows
         // Calculator has no such zoom elsewhere either.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        Self {
+        let mut app = Self {
             mode: Mode::Standard,
             calc: Calculator::default(),
             scientific: scientific_view::ScientificState::new(),
@@ -508,7 +553,12 @@ impl CalculatorApp {
             all_scripts: false,
             settings_popup: None,
             type_ahead: (String::new(), 0.0),
-        }
+        };
+        // Like Windows (`MainPage.OnNavigatedTo`), open the mode the app was closed in, the
+        // way the menu switches to it: a calculator's engine takes the memory and becomes
+        // the one `engine()` returns.
+        app.set_mode(mode);
+        app
     }
 
     /// Whether a popup covers the page: the navigation menu, a context menu, or a
@@ -704,7 +754,8 @@ impl CalculatorApp {
             || self.context_menu.is_some()
             || self.programmer.popup_open()
             || self.scientific.popup_open();
-        let events = ctx.input(|i| i.events.clone());
+        let mut events = ctx.input(|i| i.events.clone());
+        remove_alt_gr_keys(&mut events, ctx.input(|i| i.key_down(Key::AltRight)));
         let now = ctx.input(|i| i.time);
         for event in events {
             match event {
@@ -2504,6 +2555,8 @@ struct ContextMenu {
 impl eframe::App for CalculatorApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(THEME_KEY, self.theme.key().to_owned());
+        // On the Settings page, the mode under it: Settings is a page, not a mode.
+        storage.set_string(MODE_KEY, self.mode.serialization_id().to_string());
         storage.set_string(CONVERTER_KEY, self.converter.converter.preferences());
         for (key, choice) in [
             (LANGUAGE_KEY, &self.language_choice),
@@ -2968,6 +3021,88 @@ fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
     chosen
 }
 
+/// Removes the key events of letter keys pressed with `AltGr`, so that only the character it
+/// typed runs its shortcut: `AltGr+Q` types `@` on a German keyboard, which is √x, and the Q
+/// key's x² mustn't run too. Windows sees `AltGr` as `Ctrl+Alt`, which has no key shortcuts
+/// (`GetCurrentKeyDictionary`), but winit reports these keys without modifiers. (`Ctrl+Alt`
+/// typed with the left keys arrives with both modifiers, and goes to `handle_key`.)
+///
+/// `AltGr` is the right `Alt` key, whose presses and releases come in order with the other
+/// keys, so a key pressed before it in the same frame stays; `alt_gr` is whether it's down
+/// after the frame's events (egui's `key_down`). A letter key that typed only other characters
+/// than its letter counts as pressed with `AltGr` too, for where that isn't the right `Alt`
+/// key: `@`, `µ`, `€`. Its letter with diacritics is still its letter, so a dead key's letter
+/// keeps its key (`´` then E types `é`, which Windows sees as `VK_E`, and `´` then Q, which
+/// can't combine, types `´q`), and so does a letter of another script (a Russian keyboard types
+/// `й` on the Q key, `VK_Q` in Windows).
+fn remove_alt_gr_keys(events: &mut Vec<Event>, alt_gr: bool) {
+    // Whether AltGr is down before the frame's first event: the opposite of its first change
+    // in the frame (a press that repeats is no change), or how it ends the frame.
+    let mut held = events
+        .iter()
+        .find_map(|event| match event {
+            Event::Key {
+                key: Key::AltRight,
+                pressed,
+                repeat,
+                ..
+            } => Some(!pressed || *repeat),
+            _ => None,
+        })
+        .unwrap_or(alt_gr);
+    let mut i = 0;
+    while i < events.len() {
+        let with_alt_gr = match &events[i] {
+            Event::Key {
+                key: Key::AltRight,
+                pressed,
+                ..
+            } => {
+                held = *pressed;
+                false
+            }
+            // egui lets go of every key then.
+            Event::WindowFocused(false) => {
+                held = false;
+                false
+            }
+            Event::Key {
+                key, pressed: true, ..
+            } => key_letter(*key).is_some_and(|letter| {
+                let other = |c: char| {
+                    !base_letter(c).to_uppercase().eq([letter]) && !is_non_latin_letter(c)
+                };
+                // The text a key typed comes right after it.
+                let typed_other = match events.get(i + 1) {
+                    Some(Event::Text(text)) => !text.is_empty() && text.chars().all(other),
+                    _ => false,
+                };
+                held || typed_other
+            }),
+            _ => false,
+        };
+        if with_alt_gr {
+            events.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// The letter that a letter of Latin-1 or Latin Extended-A is written with, without its
+/// diacritics (`é` is `e`, `Ś` `S`: their canonical decompositions), or `c` itself.
+fn base_letter(c: char) -> char {
+    // From U+00C0 and from U+0100 on, a space where a letter has no decomposition (`ß`, `ł`).
+    const LATIN_1: &[u8; 64] = b"AAAAAA CEEEEIIII NOOOOO  UUUUY  aaaaaa ceeeeiiii nooooo  uuuuy y";
+    const EXTENDED_A: &[u8; 128] = b"AaAaAaCcCcCcCcDd  EeEeEeEeEeGgGgGgGgHh  IiIiIiIiI   JjKk LlLlLl    NnNnNn   OoOoOo  RrRrRrSsSsSsSsTtTt  UuUuUuUuUuUuWwYyYZzZzZz ";
+    let base = match u32::from(c) {
+        code @ 0xC0..=0xFF => LATIN_1[code as usize - 0xC0],
+        code @ 0x100..=0x17F => EXTENDED_A[code as usize - 0x100],
+        _ => b' ',
+    };
+    if base == b' ' { c } else { char::from(base) }
+}
+
 /// The keypad's keys and the memory row are Windows' `CalculatorButton`s, which ignore
 /// `Enter` so that it always means `=`.
 fn is_calculator_key(id: Id) -> bool {
@@ -3089,6 +3224,22 @@ fn char_command(c: char) -> Option<Command> {
         'q' | 'Q' => Command::Function(Func::Square),
         _ => return None,
     })
+}
+
+/// The letter of a letter key (`Key::R` is `R`).
+fn key_letter(key: Key) -> Option<char> {
+    let mut name = key.name().chars();
+    match (name.next(), name.next()) {
+        (Some(letter @ 'A'..='Z'), None) => Some(letter),
+        _ => None,
+    }
+}
+
+/// Whether `c` is a letter of another script than Latin (Cyrillic, Greek, Hebrew, …).
+fn is_non_latin_letter(c: char) -> bool {
+    // The Latin letters are in the blocks before Greek (Basic Latin to the combining
+    // accents) and in Latin Extended Additional.
+    c.is_alphabetic() && !matches!(c, '\0'..='\u{36F}' | '\u{1E00}'..='\u{1EFF}')
 }
 
 /// The script fonts that the interface language and the regional format need, the
@@ -3324,5 +3475,178 @@ mod tests {
         let mut events = vec![key(Key::Num1, Modifiers::ALT), Event::Text("¡".into())];
         assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Standard));
         assert!(events.is_empty());
+    }
+
+    /// What eframe saves in `app.ron`, in memory.
+    #[derive(Default)]
+    struct MemoryStorage(std::collections::BTreeMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    /// The app as eframe starts it, with what `storage` holds.
+    fn start(storage: &MemoryStorage) -> CalculatorApp {
+        let mut cc = eframe::CreationContext::_new_kittest(Context::default());
+        cc.storage = Some(storage);
+        CalculatorApp::new(&cc)
+    }
+
+    #[test]
+    fn opens_in_the_mode_it_was_closed_in() {
+        // In English, which other tests expect of `tr`, whatever the Windows display language.
+        let mut storage = MemoryStorage::default();
+        storage.0.insert(LANGUAGE_KEY.into(), "en-US".into());
+        let mut app = start(&storage);
+        for mode in Mode::CALCULATORS
+            .into_iter()
+            .chain(Category::ALL.map(Mode::Converter))
+        {
+            app.set_mode(mode);
+            // Settings is a page over the mode, not a mode.
+            app.page = Page::Settings;
+            eframe::App::save(&mut app, &mut storage);
+            let reopened = start(&storage);
+            assert_eq!(reopened.mode, mode);
+            assert!(reopened.page == Page::Calculator);
+            // The mode's own engine is the one with the memory, as after picking it in the menu.
+            let engine = match mode {
+                Mode::Scientific => &reopened.scientific.calc,
+                Mode::Programmer => &reopened.programmer.calc,
+                _ => &reopened.calc,
+            };
+            assert!(std::ptr::eq(reopened.engine(), engine), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn modes_are_saved_with_windows_ids() {
+        // `NavCategory`'s `SerializationId`s.
+        let ids = [
+            (Mode::Standard, 0),
+            (Mode::Scientific, 1),
+            (Mode::Programmer, 2),
+            (Mode::DateCalculation, 3),
+            (Mode::Converter(Category::Volume), 4),
+            (Mode::Converter(Category::Length), 5),
+            (Mode::Converter(Category::Weight), 6),
+            (Mode::Converter(Category::Temperature), 7),
+            (Mode::Converter(Category::Energy), 8),
+            (Mode::Converter(Category::Area), 9),
+            (Mode::Converter(Category::Speed), 10),
+            (Mode::Converter(Category::Time), 11),
+            (Mode::Converter(Category::Power), 12),
+            (Mode::Converter(Category::Data), 13),
+            (Mode::Converter(Category::Pressure), 14),
+            (Mode::Converter(Category::Angle), 15),
+            (Mode::Graphing, 17),
+        ];
+        for (mode, id) in ids {
+            assert_eq!(mode.serialization_id(), id, "{mode:?}");
+            assert_eq!(Mode::from_serialization_id(id), Some(mode));
+        }
+        // Currency, and ids no version of Windows has: the app opens in Standard.
+        for id in [16, -1, 18] {
+            assert_eq!(Mode::from_serialization_id(id), None);
+        }
+    }
+
+    /// Whether a key's event stays a key press, with the text it typed after it, and `AltGr`
+    /// held since an earlier frame or not.
+    fn stays_key(pressed: Key, text: &str, alt_gr: bool) -> bool {
+        let mut events = vec![key(pressed, Modifiers::NONE), Event::Text(text.into())];
+        remove_alt_gr_keys(&mut events, alt_gr);
+        assert_eq!(
+            events.last(),
+            Some(&Event::Text(text.into())),
+            "the text stays"
+        );
+        events.len() == 2
+    }
+
+    #[test]
+    fn alt_gr_characters() {
+        // AltGr+Q types `@` (√x), AltGr+M the micro sign `µ` and AltGr+E `€` on a German
+        // keyboard, and winit reports these keys without modifiers. Windows has no key
+        // shortcuts with AltGr, which it sees as Ctrl+Alt.
+        assert!(!stays_key(Key::Q, "@", false));
+        assert!(!stays_key(Key::M, "µ", false));
+        assert!(!stays_key(Key::E, "€", false));
+        // The key's letter in either case, and a letter of another script, which Windows'
+        // shortcuts see as the key's letter (a Russian keyboard types `й` on the Q key, `VK_Q`).
+        assert!(stays_key(Key::Q, "q", false));
+        assert!(stays_key(Key::Q, "Q", false));
+        assert!(stays_key(Key::Q, "й", false));
+        // A Turkish keyboard's I key types `ı`, whose capital is `I`.
+        assert!(stays_key(Key::I, "ı", false));
+        // Only letter keys: Shift+2 types `@` on a US keyboard.
+        assert!(stays_key(Key::Num2, "@", false));
+        // Ctrl+Q types nothing, and stays a key press.
+        let mut events = vec![key(Key::Q, Modifiers::COMMAND)];
+        remove_alt_gr_keys(&mut events, false);
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn dead_keys_and_alt_gr_held() {
+        // A dead key's letter is still the key's: `´` then E types `é` on a French or German
+        // keyboard, which is E (`exp`) in Windows (`VK_E`).
+        assert!(stays_key(Key::E, "é", false));
+        assert!(stays_key(Key::E, "Ê", false));
+        // A dead key that can't combine with the letter types both: `´` then Q types `´q` on a
+        // German keyboard, which is still Q (x²) in Windows (`VK_Q`).
+        assert!(stays_key(Key::Q, "´q", false));
+        // So is a `ś` typed without AltGr held (Polish AltGr+S's, where AltGr isn't the right
+        // Alt key).
+        assert!(stays_key(Key::S, "ś", false));
+        // With AltGr held, no letter key is a shortcut, whatever it typed: AltGr+R types
+        // nothing on a German keyboard, and egui-winit sends `r` then.
+        assert!(!stays_key(Key::S, "ś", true));
+        assert!(!stays_key(Key::R, "r", true));
+        assert!(!stays_key(Key::Q, "@", true));
+        // Other keys stay: AltGr+2 types `²`.
+        assert!(stays_key(Key::Num2, "²", true));
+    }
+
+    #[test]
+    fn alt_gr_in_order() {
+        let alt_gr = |pressed, repeat| Event::Key {
+            key: Key::AltRight,
+            physical_key: Some(Key::AltRight),
+            pressed,
+            repeat,
+            modifiers: Modifiers::NONE,
+        };
+        let q = key(Key::Q, Modifiers::NONE);
+        // A plain Q, then AltGr+Q, in one frame: the right Alt key goes down between them, and
+        // stays down, so only the second Q is AltGr's (4, Q, AltGr+Q is √(sqr(4)) = 4).
+        let mut events = vec![q.clone(), Event::Text("q".into()), alt_gr(true, false)];
+        events.extend([q.clone(), Event::Text("@".into())]);
+        remove_alt_gr_keys(&mut events, true);
+        let kept = [q.clone(), Event::Text("q".into()), alt_gr(true, false)];
+        assert_eq!(events, [&kept[..], &[Event::Text("@".into())]].concat());
+        // AltGr, held since an earlier frame (its press repeats), is let go before an S.
+        let s = key(Key::S, Modifiers::NONE);
+        let mut events = vec![alt_gr(true, true), alt_gr(false, false), s.clone()];
+        events.push(Event::Text("s".into()));
+        remove_alt_gr_keys(&mut events, false);
+        assert!(events.contains(&s));
+        // Held since an earlier frame, without an event in this one: Polish AltGr+S's `ś` is
+        // AltGr's.
+        let mut events = vec![s.clone(), Event::Text("ś".into())];
+        remove_alt_gr_keys(&mut events, true);
+        assert_eq!(events, [Event::Text("ś".into())]);
     }
 }

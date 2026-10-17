@@ -33,13 +33,17 @@ impl View {
         self.y_max - self.y_min
     }
 
-    /// Whether the ranges can be drawn: finite, and not too small for doubles.
+    /// Whether the ranges can be drawn: finite, not too wide, wider than 1e-10 of their
+    /// ends (narrower ones lose their precision in doubles) and than `MIN_SPAN`. Around
+    /// the origin no relative limit stops zooming in, which used to go on into the
+    /// subnormal doubles, where the grid's powers of ten underflow.
     pub fn is_valid(&self) -> bool {
         let ok = |min: f64, max: f64| {
             min.is_finite()
                 && max.is_finite()
                 && max > min
                 && (max - min) > 1e-10 * min.abs().max(max.abs())
+                && (max - min) > MIN_SPAN
                 && (max - min) < 1e100
         };
         ok(self.x_min, self.x_max) && ok(self.y_min, self.y_max)
@@ -114,6 +118,11 @@ impl View {
     }
 }
 
+/// The narrowest range a view can have: 10⁸ times the smallest normal double (about
+/// 2.2e-300), so that a pixel's share of it, the grid's steps and the tracer's precision
+/// all stay normal numbers too.
+const MIN_SPAN: f64 = f64::MIN_POSITIVE * 1e8;
+
 /// The distance between the labeled grid lines and between all grid lines.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridStep {
@@ -126,6 +135,14 @@ pub struct GridStep {
 /// (or fourth, for a 2) of that. Windows labels 10s and draws 2s for x from −27 to 27.
 pub fn grid_step(span: f64, pixels: f32) -> GridStep {
     let most = (pixels as f64 / 48.0).clamp(2.0, 7.0);
+    // Valid views (`View::is_valid`) are well inside these bounds. Outside them (0,
+    // subnormal, infinite or NaN spans) the powers of ten would be 0 or infinite, and
+    // the search below would never end.
+    let span = if span > 1e-300 {
+        span.min(1e300)
+    } else {
+        1e-300
+    };
     let mut power = 10f64.powf((span / most).log10().floor() - 1.0);
     loop {
         for (m, parts) in [(1.0, 5.0), (2.0, 4.0), (5.0, 5.0)] {
@@ -903,6 +920,19 @@ mod tests {
     }
 
     #[test]
+    fn grid_steps_of_degenerate_spans() {
+        // Views don't get this narrow or wide, but these spans used to make the powers of
+        // ten 0 or infinite, and the search never ended.
+        for span in [5e-324, 1e-310, 0.0, -1.0, f64::INFINITY, f64::NAN] {
+            let step = grid_step(span, 800.0);
+            assert!(
+                step.minor > 0.0 && step.major.is_finite(),
+                "{span:e}: {step:?}"
+            );
+        }
+    }
+
+    #[test]
     fn view_math() {
         let view = View::DEFAULT;
         assert_eq!(view.px_of(0.0, 0.0, 200.0, 100.0), (100.0, 50.0));
@@ -928,6 +958,34 @@ mod tests {
             .precision(),
             0.01
         );
+    }
+
+    #[test]
+    fn zooming_in_stops_before_subnormal_views() {
+        // The zoom buttons held down on an empty graph: no relative limit stops a view
+        // around the origin, which used to shrink into the subnormal doubles.
+        let (w, h) = (1340.0, 760.0);
+        let mut view = View::DEFAULT;
+        for _ in 0..20_000 {
+            view = view.zoomed(w as f64 / 2.0, h as f64 / 2.0, w, h, 1.0 / 1.0625);
+        }
+        assert!(
+            view.width() > MIN_SPAN && view.width() < 1.1 * MIN_SPAN,
+            "{view:?}"
+        );
+        // Graph options' ranges: microscopic ones are drawn, subnormal ones refused.
+        let x_range = |x_min, x_max| {
+            View {
+                x_min,
+                x_max,
+                ..View::DEFAULT
+            }
+            .is_valid()
+        };
+        assert!(x_range(0.0, 1e-12));
+        assert!(x_range(-1e-200, 1e-200));
+        assert!(!x_range(0.0, 1e-305));
+        assert!(!x_range(0.0, 5e-324));
     }
 
     #[test]
