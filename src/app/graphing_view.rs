@@ -559,8 +559,9 @@ fn normalize(text: &mut String) {
 
 /// An equation laid out like math (Windows' math editor shows it so): variables in
 /// italics, function names upright, exponents raised and smaller with their `^` hidden,
-/// and space around relations and the binary + and −.
-pub(super) fn math_job(text: &str, size: f32, color: Color32) -> LayoutJob {
+/// and space around relations and the binary + and −. `syntax` is the region's, as for
+/// parsing: a comma is a decimal separator only with a decimal comma.
+pub(super) fn math_job(text: &str, size: f32, color: Color32, syntax: Syntax) -> LayoutJob {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     // Per character: italics, raised, hidden, extra space after.
@@ -588,7 +589,9 @@ pub(super) fn math_job(text: &str, size: f32, color: Color32) -> LayoutJob {
         i += 1;
     }
     // Exponents: what follows a ^ (a parenthesized group, a number, a name or a letter,
-    // with a sign) is raised.
+    // with a sign) is raised. A number has the parser's decimal points (`tokenize`), so
+    // the comma of `root(x^2,3)` ends it.
+    let number = |c: char| c.is_ascii_digit() || c == '.' || c == syntax.decimal;
     let mut i = 0;
     while i < n {
         if chars[i] != '^' {
@@ -603,8 +606,8 @@ pub(super) fn math_job(text: &str, size: f32, color: Color32) -> LayoutJob {
         let start = j;
         if j < n && chars[j] == '(' {
             j = group_end(&chars, j);
-        } else if j < n && (chars[j].is_ascii_digit() || chars[j] == '.' || chars[j] == ',') {
-            while j < n && (chars[j].is_ascii_digit() || chars[j] == '.' || chars[j] == ',') {
+        } else if j < n && number(chars[j]) {
+            while j < n && number(chars[j]) {
                 j += 1;
             }
         } else if j < n && chars[j].is_ascii_alphabetic() {
@@ -1194,8 +1197,9 @@ impl CalculatorApp {
             pos2(right - 4.0, rect.bottom()),
         );
         let text_color = p.text;
+        let syntax = region_syntax();
         let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| -> Arc<Galley> {
-            ui.fonts_mut(|f| f.layout_job(math_job(buf.as_str(), 14.0, text_color)))
+            ui.fonts_mut(|f| f.layout_job(math_job(buf.as_str(), 14.0, text_color, syntax)))
         };
         let row = &mut self.graphing.rows[index];
         let hint = egui::RichText::new(tr("mathRichEditBox.PlaceholderText"))
@@ -1701,7 +1705,7 @@ impl CalculatorApp {
             f,
             fg,
         );
-        let equation = painter.layout_job(math_job(&row.submitted, 14.0, p.text));
+        let equation = painter.layout_job(math_job(&row.submitted, 14.0, p.text, region_syntax()));
         let text_clip = Rect::from_min_max(
             pos2(back.right() + 10.0, header.top()),
             header.max - vec2(6.0, 0.0),
@@ -3059,7 +3063,7 @@ mod tests {
 
     #[test]
     fn math_layout() {
-        let job = math_job("y=mx^2+sin(x)", 14.0, Color32::WHITE);
+        let job = math_job("y=mx^2+sin(x)", 14.0, Color32::WHITE, Syntax::default());
         // The format of character k (sections with the same format merge).
         let style = |k: usize| {
             let at = job.text.char_indices().nth(k).unwrap().0;
@@ -3079,7 +3083,7 @@ mod tests {
         assert!(style(0).extra_letter_spacing > 0.0 && style(1).extra_letter_spacing > 0.0);
         assert!(style(6).extra_letter_spacing > 0.0);
         // A leading minus isn't spaced.
-        let job = math_job("−x", 14.0, Color32::WHITE);
+        let job = math_job("−x", 14.0, Color32::WHITE, Syntax::default());
         assert_eq!(job.sections[0].format.extra_letter_spacing, 0.0);
     }
 
@@ -3088,5 +3092,31 @@ mod tests {
         let mut s = "2*x-1".to_string();
         normalize(&mut s);
         assert_eq!(s, "2·x−1");
+    }
+
+    #[test]
+    fn exponents_end_at_the_argument_separator() {
+        // The characters `math_job` raises.
+        let raised = |text: &str, syntax: Syntax| -> String {
+            let job = math_job(text, 14.0, Color32::WHITE, syntax);
+            text.char_indices()
+                .filter(|&(at, _)| {
+                    job.sections
+                        .iter()
+                        .find(|s| s.byte_range.start.0 <= at && at < s.byte_range.end.0)
+                        .is_some_and(|s| s.format.valign == Align::TOP)
+                })
+                .map(|(_, c)| c)
+                .collect()
+        };
+        // With a decimal point, a comma separates the arguments.
+        let point = Syntax::default();
+        assert_eq!(raised("root(x^2,3)", point), "2");
+        assert_eq!(raised("log(x^2,8)", point), "2");
+        assert_eq!(raised("x^2.5", point), "2.5");
+        // With a decimal comma it's in the number, and a semicolon separates them.
+        let comma = Syntax::for_decimal(',');
+        assert_eq!(raised("x^2,5", comma), "2,5");
+        assert_eq!(raised("root(x^2;3)", comma), "2");
     }
 }
