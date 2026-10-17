@@ -223,6 +223,9 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   short. `App::ui` hands the Graphing mode, the date mode and the converters over to
   `draw_graphing_mode`, `draw_date_mode` and `draw_converter_mode` and returns early.
   `Page::Settings` replaces any mode, and going back returns to the mode that was open.
+  Like Windows, the app opens in the mode it was closed in: `save` stores it under Windows' key
+  `Mode` as Windows' id (`Mode::serialization_id`, `NavCategory`'s `SerializationId`), and `new`
+  switches to it with `set_mode`. Settings is a page, not a mode: the mode under it is saved.
 - The Standard, Scientific and Programmer modes each have their engine (`calc`,
   `scientific.calc`, `programmer.calc`). `engine()` / `engine_mut()` return the one of
   `last_calculator`, and the shared code (display, keyboard, memory row and list, history)

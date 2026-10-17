@@ -85,6 +85,9 @@ const REPOSITORY_URL: &str = "https://github.com/gavrilov/calccraft";
 const FEEDBACK_URL: &str = "https://github.com/gavrilov/calccraft/issues";
 /// Storage key and values of the theme choice, the same as Windows uses.
 const THEME_KEY: &str = "SelectedAppTheme";
+/// Storage key of the mode the app was closed in, the same as Windows uses
+/// (`ApplicationViewModel.Mode`); the value is `Mode::serialization_id`.
+const MODE_KEY: &str = "Mode";
 /// Storage key of the last converter and its units, the same as Windows uses.
 const CONVERTER_KEY: &str = "UnitConverterPreferences";
 /// Storage keys of the Language and Regional format choices, which Windows doesn't have:
@@ -310,6 +313,42 @@ impl Mode {
     fn has_history(self) -> bool {
         matches!(self, Mode::Standard | Mode::Scientific)
     }
+
+    /// Windows' id of the mode, `NavCategory`'s `SerializationId`: Windows saves it as its
+    /// `Mode` setting to open in that mode next time. The ids never change; 16 is the
+    /// Currency converter, which CalcCraft doesn't have.
+    fn serialization_id(self) -> i32 {
+        match self {
+            Mode::Standard => 0,
+            Mode::Scientific => 1,
+            Mode::Programmer => 2,
+            Mode::DateCalculation => 3,
+            Mode::Converter(category) => match category {
+                Category::Volume => 4,
+                Category::Length => 5,
+                Category::Weight => 6,
+                Category::Temperature => 7,
+                Category::Energy => 8,
+                Category::Area => 9,
+                Category::Speed => 10,
+                Category::Time => 11,
+                Category::Power => 12,
+                Category::Data => 13,
+                Category::Pressure => 14,
+                Category::Angle => 15,
+            },
+            Mode::Graphing => 17,
+        }
+    }
+
+    /// The mode with that `serialization_id`, if CalcCraft has it
+    /// (`NavCategoryStates.Deserialize`).
+    fn from_serialization_id(id: i32) -> Option<Mode> {
+        Mode::CALCULATORS
+            .into_iter()
+            .chain(Category::ALL.map(Mode::Converter))
+            .find(|mode| mode.serialization_id() == id)
+    }
 }
 
 /// What fills the window: the calculator or, as in Windows, the Settings page instead.
@@ -472,10 +511,16 @@ impl CalculatorApp {
             .storage
             .and_then(|s| s.get_string(graphing_view::THEME_KEY))
             .is_some_and(|v| v == "true");
+        let mode = cc
+            .storage
+            .and_then(|s| s.get_string(MODE_KEY))
+            .and_then(|id| id.parse().ok())
+            .and_then(Mode::from_serialization_id)
+            .unwrap_or(Mode::Standard);
         // Ctrl with plus, minus and 0 zoom the graph, not the whole window, and Windows
         // Calculator has no such zoom elsewhere either.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        Self {
+        let mut app = Self {
             mode: Mode::Standard,
             calc: Calculator::default(),
             scientific: scientific_view::ScientificState::new(),
@@ -508,7 +553,12 @@ impl CalculatorApp {
             all_scripts: false,
             settings_popup: None,
             type_ahead: (String::new(), 0.0),
-        }
+        };
+        // Like Windows (`MainPage.OnNavigatedTo`), open the mode the app was closed in, the
+        // way the menu switches to it: a calculator's engine takes the memory and becomes
+        // the one `engine()` returns.
+        app.set_mode(mode);
+        app
     }
 
     /// Whether a popup covers the page: the navigation menu, a context menu, or a
@@ -2505,6 +2555,8 @@ struct ContextMenu {
 impl eframe::App for CalculatorApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(THEME_KEY, self.theme.key().to_owned());
+        // On the Settings page, the mode under it: Settings is a page, not a mode.
+        storage.set_string(MODE_KEY, self.mode.serialization_id().to_string());
         storage.set_string(CONVERTER_KEY, self.converter.converter.preferences());
         for (key, choice) in [
             (LANGUAGE_KEY, &self.language_choice),
@@ -3404,6 +3456,92 @@ mod tests {
         let mut events = vec![key(Key::Num5, Modifiers::NONE), Event::Text("5".into())];
         assert_eq!(take_mode_shortcut(&mut events), None);
         assert_eq!(events.len(), 2);
+    }
+
+    /// What eframe saves in `app.ron`, in memory.
+    #[derive(Default)]
+    struct MemoryStorage(std::collections::BTreeMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    /// The app as eframe starts it, with what `storage` holds.
+    fn start(storage: &MemoryStorage) -> CalculatorApp {
+        let mut cc = eframe::CreationContext::_new_kittest(Context::default());
+        cc.storage = Some(storage);
+        CalculatorApp::new(&cc)
+    }
+
+    #[test]
+    fn opens_in_the_mode_it_was_closed_in() {
+        // In English, which other tests expect of `tr`, whatever the Windows display language.
+        let mut storage = MemoryStorage::default();
+        storage.0.insert(LANGUAGE_KEY.into(), "en-US".into());
+        let mut app = start(&storage);
+        for mode in Mode::CALCULATORS
+            .into_iter()
+            .chain(Category::ALL.map(Mode::Converter))
+        {
+            app.set_mode(mode);
+            // Settings is a page over the mode, not a mode.
+            app.page = Page::Settings;
+            eframe::App::save(&mut app, &mut storage);
+            let reopened = start(&storage);
+            assert_eq!(reopened.mode, mode);
+            assert!(reopened.page == Page::Calculator);
+            // The mode's own engine is the one with the memory, as after picking it in the menu.
+            let engine = match mode {
+                Mode::Scientific => &reopened.scientific.calc,
+                Mode::Programmer => &reopened.programmer.calc,
+                _ => &reopened.calc,
+            };
+            assert!(std::ptr::eq(reopened.engine(), engine), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn modes_are_saved_with_windows_ids() {
+        // `NavCategory`'s `SerializationId`s.
+        let ids = [
+            (Mode::Standard, 0),
+            (Mode::Scientific, 1),
+            (Mode::Programmer, 2),
+            (Mode::DateCalculation, 3),
+            (Mode::Converter(Category::Volume), 4),
+            (Mode::Converter(Category::Length), 5),
+            (Mode::Converter(Category::Weight), 6),
+            (Mode::Converter(Category::Temperature), 7),
+            (Mode::Converter(Category::Energy), 8),
+            (Mode::Converter(Category::Area), 9),
+            (Mode::Converter(Category::Speed), 10),
+            (Mode::Converter(Category::Time), 11),
+            (Mode::Converter(Category::Power), 12),
+            (Mode::Converter(Category::Data), 13),
+            (Mode::Converter(Category::Pressure), 14),
+            (Mode::Converter(Category::Angle), 15),
+            (Mode::Graphing, 17),
+        ];
+        for (mode, id) in ids {
+            assert_eq!(mode.serialization_id(), id, "{mode:?}");
+            assert_eq!(Mode::from_serialization_id(id), Some(mode));
+        }
+        // Currency, and ids no version of Windows has: the app opens in Standard.
+        for id in [16, -1, 18] {
+            assert_eq!(Mode::from_serialization_id(id), None);
+        }
     }
 
     /// Whether a key's event stays a key press, with the text it typed after it, and `AltGr`
