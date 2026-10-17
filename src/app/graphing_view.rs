@@ -421,7 +421,7 @@ impl GraphingState {
     /// Graphs what is typed in a box. Returns whether that changed anything.
     pub(super) fn submit(&mut self, index: usize, syntax: Syntax) -> bool {
         let row = &mut self.rows[index];
-        if row.text == row.submitted && row.equation.is_some() == !row.text.trim().is_empty() {
+        if row.text == row.submitted && row.equation.is_some() != row.text.trim().is_empty() {
             return false;
         }
         row.submitted = row.text.clone();
