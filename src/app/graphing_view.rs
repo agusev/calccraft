@@ -2186,11 +2186,7 @@ impl CalculatorApp {
             .response
             .response
             .widget_info(|| WidgetInfo::labeled(WidgetType::TextEdit, true, name));
-        if output.response.response.lost_focus() && ui.ctx().input(|i| i.key_pressed(Key::Enter)) {
-            // Enter moves to the next box (`GridSettingsTextBox_PreviewKeyDown`).
-            let next = range_id((k + 1) % 4);
-            ui.ctx().memory_mut(|m| m.request_focus(next));
-        }
+        enter_to_next_box(ui.ctx(), k, &output.response.response);
     }
 
     /// The line options flyout (`EquationStylePanelControl`): 14 colors and, except for
@@ -2696,6 +2692,17 @@ fn text_ui(ui: &mut Ui, rect: Rect, p: &super::palette::Palette) -> Ui {
     child
 }
 
+/// Enter in the window box `k` moves the focus to the next box
+/// (`GridSettingsTextBox_PreviewKeyDown`). Like Windows (`e.Handled = true`), it consumes
+/// the key: the next box is drawn later in the same frame, and the same Enter would end
+/// its input and take the focus away again.
+fn enter_to_next_box(ctx: &Context, k: usize, response: &egui::Response) {
+    if response.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter)) {
+        ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+        ctx.memory_mut(|m| m.request_focus(range_id((k + 1) % 4)));
+    }
+}
+
 /// What a window box holds: the view's `value` until something else is typed in it, or
 /// `None` while the text isn't a number. The box shows the value with 6 digits, so
 /// reading that text back would move the view by a click into the box.
@@ -3114,6 +3121,45 @@ mod tests {
         let list = drop_down_rect(combo, 4, full);
         assert_eq!(list.bottom(), combo.top() - 2.0);
         assert!(full.contains_rect(list));
+    }
+
+    #[test]
+    fn enter_moves_to_the_next_range_box() {
+        // The four window boxes, each with its Enter handling, in a bare egui context.
+        let ctx = Context::default();
+        let mut texts: [String; 4] = Default::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            // The font atlas has no renderer to go to.
+            ctx.run_ui(input, |ui| {
+                for (k, text) in texts.iter_mut().enumerate() {
+                    let output = TextEdit::singleline(text).id(range_id(k)).show(ui);
+                    enter_to_next_box(ui.ctx(), k, &output.response.response);
+                }
+            })
+            .textures_delta
+            .clear();
+        };
+        let enter = egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let focused = |ctx: &Context| (0..4).find(|&k| ctx.memory(|m| m.has_focus(range_id(k))));
+        ctx.memory_mut(|m| m.request_focus(range_id(0)));
+        frame(vec![]);
+        // X-Min, X-Max, Y-Min, Y-Max, and from there back to X-Min.
+        for next in [1, 2, 3, 0] {
+            frame(vec![enter.clone()]);
+            frame(vec![]);
+            assert_eq!(focused(&ctx), Some(next));
+        }
     }
 
     #[test]
