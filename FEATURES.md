@@ -754,10 +754,11 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
     start at Celsius → Fahrenheit.
   - Each category keeps its units while the app runs. The last category and its units are saved
     as `UnitConverterPreferences`.
-  - Keyboard: digits, `.` or `,`, `Backspace`, `Delete` (`CE`), `F9` or `-` (`±`). `Ctrl+C`
+  - Keyboard: digits, `.` or `,`, `Backspace`, `Delete` or `Esc` (`CE`), `F9` or `-` (`±`). `Ctrl+C`
     copies the active value, and `Ctrl+V` pastes a number with Windows' checks (one plain number,
     at most 16 characters). Invalid text shows `Invalid input` in both fields.
-  - A unit drop-down opens with the selected unit over its picker; `Esc` or a click outside closes it.
+  - A unit drop-down opens with the selected unit over its picker; `Esc` (which then doesn't
+    clear) or a click outside closes it.
   - In a landscape window the keypad sits next to the values, and from 640 px on the values, the
     unit pickers and the keys get larger, as in `UnitConverter.xaml`.
 - **Differences:** the unit lists don't wrap around (Windows uses a looping `CarouselPanel`).

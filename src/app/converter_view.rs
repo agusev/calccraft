@@ -121,6 +121,17 @@ fn char_command(c: char) -> Option<ConverterCommand> {
     }
 }
 
+/// The command a named key stands for. Windows gives `CE` two keys, Delete and Esc
+/// (`UnitConverter` adds `Escape` to `ClearEntryButtonPos0`'s shortcut).
+fn key_command(key: Key) -> Option<ConverterCommand> {
+    match key {
+        Key::Backspace => Some(ConverterCommand::Backspace),
+        Key::Delete | Key::Escape => Some(ConverterCommand::Clear),
+        Key::F9 => Some(ConverterCommand::Negate),
+        _ => None,
+    }
+}
+
 /// The heights of rows sized like XAML star rows: in proportion to their weights,
 /// but never below their minimum heights.
 pub(super) fn star_rows(total: f32, rows: &[(f32, f32)]) -> Vec<f32> {
@@ -167,7 +178,8 @@ impl CalculatorApp {
         let now = ctx.input(|i| i.time);
         for event in ctx.input(|i| i.events.clone()) {
             // An open drop-down or menu takes the keyboard (Windows' `HonorShortcuts(false)`
-            // while the menu is open); Esc closes it.
+            // while the menu is open); Esc closes it without clearing (Windows' view model
+            // ignores `CE` while a drop-down is open).
             if self.converter.popup_open() || self.flyout == Flyout::Navigation {
                 if matches!(
                     event,
@@ -194,22 +206,18 @@ impl CalculatorApp {
                     modifiers,
                     ..
                 } if !modifiers.command => {
-                    let command = match key {
-                        Key::Escape => {
-                            self.flyout = Flyout::None;
-                            continue;
+                    // The keypad's keys ignore Enter, as Windows' `CalculatorButton`s do.
+                    if key == Key::Enter && access::focused(ctx).is_some_and(is_converter_key) {
+                        ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                    } else if let Some(command) = key_command(key) {
+                        // egui drops the focus on Esc; in Windows it's only `CE`.
+                        if key == Key::Escape
+                            && let Some(id) = self.last_focus
+                        {
+                            ctx.memory_mut(|memory| memory.request_focus(id));
                         }
-                        // The keypad's keys ignore Enter, as Windows' `CalculatorButton`s do.
-                        Key::Enter if access::focused(ctx).is_some_and(is_converter_key) => {
-                            ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-                            continue;
-                        }
-                        Key::Backspace => ConverterCommand::Backspace,
-                        Key::Delete => ConverterCommand::Clear,
-                        Key::F9 => ConverterCommand::Negate,
-                        _ => continue,
-                    };
-                    self.converter_press(command, now);
+                        self.converter_press(command, now);
+                    }
                 }
                 Event::Copy => {
                     ctx.copy_text(numbers().localize_plain(&self.converter.converter.copy_text()))
@@ -727,5 +735,18 @@ mod tests {
         assert_eq!(char_command(','), Some(ConverterCommand::Decimal));
         assert_eq!(char_command('-'), Some(ConverterCommand::Negate));
         assert_eq!(char_command('+'), None);
+    }
+
+    #[test]
+    fn escape_is_ce() {
+        // Windows' converter gives `CE` two keys: Delete and Esc.
+        assert_eq!(key_command(Key::Delete), Some(ConverterCommand::Clear));
+        assert_eq!(key_command(Key::Escape), Some(ConverterCommand::Clear));
+        assert_eq!(
+            key_command(Key::Backspace),
+            Some(ConverterCommand::Backspace)
+        );
+        assert_eq!(key_command(Key::F9), Some(ConverterCommand::Negate));
+        assert_eq!(key_command(Key::Enter), None);
     }
 }
