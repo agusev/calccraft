@@ -415,8 +415,8 @@ These follow from the Windows source and are pinned by tests too:
   `2 + 3 × 4 +` shows `14`. Changing `−` to `×` in `1 + 2 −` gives `(1 + 2) ×`. `=` closes all
   open parentheses, and a number next to a parenthesis multiplies: `2(3)` → `6`.
 - The expression line writes subtraction as a hyphen: `9 - 4 =`.
-- `5 =` adds `5 =` to the history, and a finished function followed by a new number adds the
-  function (`√(4)`).
+- `5 =` adds `5 =` to the history, and a finished function followed by a new number or MR adds
+  the function with the result it showed (`√(4)` = `2`, not the recalled value).
 - After `=`, `CE` keeps the last operation: `2 + 3 =`, `CE`, `=` gives `0 + 3 =` → `3`.
 - Pasted text is checked like in `CopyPasteManager`: at most 512 characters, 100 operands and
   16 digits per operand (32 in the Scientific mode), exponents of up to 4 digits (`1.5e-3`).

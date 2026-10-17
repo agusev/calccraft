@@ -204,7 +204,7 @@ UI code and is covered by unit tests.*
     operation is recorded, including the intermediate ones of a chain (`1 + 2 +` records
     `1 + 2 =`). With precedence on, the entry is the whole expression (`2 + 3 × 4 =`).
   - As in Windows, `5 =` records `5 =`, and a finished function followed by a new number
-    records the function (`√(4)` → `2`).
+    or `MR` records the function with its own result (`√(4)` → `2`).
 - **Differences:** the history is not saved when the app closes, as in Windows.
 
 #### `FEAT-CORE-008` Calculation Error & Edge Case Engine
