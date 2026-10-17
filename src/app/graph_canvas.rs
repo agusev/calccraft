@@ -73,8 +73,14 @@ fn tick_label(value: f64, step: f64) -> String {
 /// The traced point's value, as Windows writes it: x as rounded ("R"), y with 15
 /// decimals ("N15").
 pub(super) fn trace_text(x: f64, y: f64) -> String {
-    let x = numbers().localize_plain(&format!("{x}"));
-    let y = numbers().localize(&format!("{y:.15}"));
+    // Windows' .NET Native formats like .NET before Core 3.0, which drops the sign of a
+    // value that rounds to 0: −0 is "0" and −0.0000000000000004 is "0.000000000000000".
+    let unsigned = |text: String| match text.strip_prefix('-') {
+        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_string(),
+        _ => text,
+    };
+    let x = numbers().localize_plain(&unsigned(format!("{x}")));
+    let y = numbers().localize(&unsigned(format!("{y:.15}")));
     format!("({x}, {y})")
 }
 
@@ -919,6 +925,16 @@ mod tests {
         assert_eq!(x.to_string(), "3.82");
         assert_eq!(trace_text(x, x * x), "(3.82, 14.592400000000000)");
         assert_eq!(rounded(1234.0, 10.0), 1230.0);
+    }
+
+    #[test]
+    fn traced_zeros_have_no_sign() {
+        // Just left of the origin, y = x is traced at x = −0 (−0.3 steps round to −0) with
+        // y = −0: Windows shows (0, 0.000000000000000). A y that rounds to 0 loses its sign
+        // too, while other negatives keep theirs.
+        assert_eq!(trace_text(-0.0, -0.0), "(0, 0.000000000000000)");
+        assert_eq!(trace_text(-0.0, -4e-16), "(0, 0.000000000000000)");
+        assert_eq!(trace_text(-0.01, -0.01), "(-0.01, -0.010000000000000)");
     }
 
     #[test]
