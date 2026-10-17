@@ -188,7 +188,12 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   history or memory flyout disables the keypad and memory keys (`keypad_disabled`, Windows'
   `EnableControls(false)`), and keep-on-top turns the `Ctrl` shortcuts off. egui's own
   `Ctrl` + plus, minus and 0 zoom is off (`zoom_with_keyboard`): Windows has none, and the graph
-  zooms with those keys.
+  zooms with those keys. A letter key pressed with `AltGr` is no key press for the calculator,
+  only the character it typed is (`remove_alt_gr_keys`; `@` on the Q key of a German keyboard):
+  Windows sees `AltGr` as `Ctrl+Alt`, which has no shortcuts, but winit reports it without
+  modifiers. The right `Alt` key's own events tell when it's down, in order with the other
+  keys; a letter key that typed only other characters than its letter (diacritics aside, so a
+  dead key's `é` and `´q` stay `E` and `Q`) counts as pressed with `AltGr` too.
 - Every interactive control goes through `access::control`, which makes it clickable and
   focusable (`Tab`, `Shift+Tab`, arrow keys: egui's own focus handling), gives it a screen
   reader description (`access::button`, `item`, `combo_box`), draws WinUI's focus visual and
