@@ -945,7 +945,10 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
   CalcCraft's `best_fit` (the key points near the origin, the values there, a tenth more where a
   curve turns, proportional axes) matches it for x² and gives similar views elsewhere. egui's
   own Ctrl + plus / minus / 0 zoom of the whole window is turned off in every mode (Windows has
-  none).
+  none). Windows' engine can refuse a zoom (`ScaleRange` returns an `HRESULT`) by rules that
+  aren't public; CalcCraft's views stay wider than 10⁻¹⁰ of their coordinates and than about
+  2 × 10⁻³⁰⁰, far from the subnormal doubles (`View::is_valid`), whether zoomed or typed into
+  X-Min … Y-Max.
 
 #### `FEAT-GRAPH-003` Interactive Curve Tracer
 - **Status:** `[x] COMPLETED`
