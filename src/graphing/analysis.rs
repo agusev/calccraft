@@ -804,6 +804,26 @@ struct End {
     attained: bool,
 }
 
+/// The values on one piece of the domain: from the lowest to the highest of its ends.
+fn span(ends: &[End]) -> Option<Interval> {
+    if ends.is_empty() {
+        return None;
+    }
+    let lo = ends.iter().map(|e| e.value).fold(f64::INFINITY, f64::min);
+    let hi = ends
+        .iter()
+        .map(|e| e.value)
+        .fold(f64::NEG_INFINITY, f64::max);
+    // Constant on the piece (x/x): the value is taken inside it.
+    let attained = |v: f64| lo == hi || ends.iter().any(|e| e.value == v && e.attained);
+    Some(Interval {
+        lo,
+        hi,
+        lo_closed: attained(lo) && lo.is_finite(),
+        hi_closed: attained(hi) && hi.is_finite(),
+    })
+}
+
 // ------------------------------------------------------------------ aperiodic
 
 /// Features that need the derivatives (or none of floor's jumps).
@@ -974,22 +994,7 @@ fn aperiodic(fun: &Fun) -> Option<Features> {
                 None => known = false,
             }
         }
-        if ends.is_empty() {
-            continue;
-        }
-        let lo = ends.iter().map(|e| e.value).fold(f64::INFINITY, f64::min);
-        let hi = ends
-            .iter()
-            .map(|e| e.value)
-            .fold(f64::NEG_INFINITY, f64::max);
-        // Constant on the piece (x/x): the value is taken inside it.
-        let attained = |v: f64| lo == hi || ends.iter().any(|e| e.value == v && e.attained);
-        pieces.push(Interval {
-            lo,
-            hi,
-            lo_closed: attained(lo) && lo.is_finite(),
-            hi_closed: attained(hi) && hi.is_finite(),
-        });
+        pieces.extend(span(&ends));
     }
     if known {
         let pieces = union(pieces);
@@ -1331,17 +1336,31 @@ fn periodic(fun: &Fun, p: f64) -> Features {
             .collect();
     }
 
-    // The range over a period: the turning values, or ±∞ next to a pole.
-    let mut ends: Vec<End> = turns
-        .iter()
-        .map(|t| End {
-            value: exact::snap(fun.f(t.0), TIGHT),
-            attained: true,
-        })
-        .collect();
+    // The range: on each piece of the period between the points outside the domain (all of
+    // it if there are none), from the lowest to the highest of its turning values and the
+    // limits at its ends, as on the pieces of an aperiodic domain. One interval for the
+    // whole period would fill the gap between the branches of sec x, which has no values in
+    // (−1, 1).
+    let turning = |x: f64| End {
+        value: exact::snap(fun.f(x), TIGHT),
+        attained: true,
+    };
+    let mut pieces = Vec::new();
     let mut known = true;
-    for &x in &excluded {
-        for side in [-1.0, 1.0] {
+    if excluded.is_empty() {
+        let ends: Vec<End> = turns.iter().map(|t| turning(t.0)).collect();
+        pieces.extend(span(&ends));
+    }
+    for (i, &a) in excluded.iter().enumerate() {
+        // To the next point: after the last one, the first one of the next period.
+        let next = excluded.get(i + 1).copied().unwrap_or(excluded[0]);
+        let b = if next > a { next } else { next + p };
+        let mut ends: Vec<End> = turns
+            .iter()
+            .filter(|t| (t.0 > a && t.0 < b) || (t.0 + p > a && t.0 + p < b))
+            .map(|t| turning(t.0))
+            .collect();
+        for (x, side) in [(a, 1.0), (next, -1.0)] {
             match limit_end(limit_at(fun, x, side)) {
                 Some(value) => ends.push(End {
                     value,
@@ -1350,21 +1369,10 @@ fn periodic(fun: &Fun, p: f64) -> Features {
                 None => known = false,
             }
         }
+        pieces.extend(span(&ends));
     }
-    if known && !ends.is_empty() {
-        let lo = ends.iter().map(|e| e.value).fold(f64::INFINITY, f64::min);
-        let hi = ends
-            .iter()
-            .map(|e| e.value)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let attained = |v: f64| ends.iter().any(|e| e.value == v && e.attained);
-        let range = Interval {
-            lo,
-            hi,
-            lo_closed: attained(lo) && lo.is_finite(),
-            hi_closed: attained(hi) && hi.is_finite(),
-        };
-        features.range = Some(set_text('y', &[range]));
+    if known && !pieces.is_empty() {
+        features.range = Some(set_text('y', &union(pieces)));
     } else {
         features.too_complex.push(Feature::Range);
     }
@@ -1769,6 +1777,30 @@ mod tests {
         let f = analyze(&equation, Angle::Degrees).unwrap();
         assert_eq!(f.period, Period::Periodic("360".to_string()));
         assert_eq!(f.x_intercepts.as_deref(), Some("{180n₁, n₁ ∈ ℤ}"));
+    }
+
+    #[test]
+    fn periodic_ranges_between_poles() {
+        // sec x and csc x have no values between −1 and 1: each branch between two poles has
+        // a range of its own.
+        for text in ["y=sec(x)", "y=csc(x)", "y=1/cos(x)"] {
+            let f = analyze_text(text);
+            assert_eq!(
+                f.range.as_deref(),
+                Some("{y ∈ (−∞, −1] ∪ [1, ∞)}"),
+                "{text}"
+            );
+        }
+        let f = analyze_text("y=1/(1-2sin(x))");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ (−∞, −1] ∪ [1/3, ∞)}"));
+        let equation = Equation::parse("y=2sec(x)+1", Syntax::default()).unwrap();
+        let f = analyze(&equation, Angle::Degrees).unwrap();
+        assert_eq!(f.range.as_deref(), Some("{y ∈ (−∞, −1] ∪ [3, ∞)}"));
+        // Branches that overlap make one range.
+        let f = analyze_text("y=sec(x)+csc(x)");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ ℝ}"));
+        let f = analyze_text("y=sec(x)^2");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [1, ∞)}"));
     }
 
     #[test]
