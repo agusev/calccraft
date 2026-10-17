@@ -506,6 +506,10 @@ functions, after `ratpak`) and `src/engine.rs` (`Calculator::with_precedence()`)
     the keys only, and the lists wrap 32-digit results like Windows'.
   - Windows' keyboard shortcuts, screen reader names in 60 languages (59 new strings), both
     themes.
+  - A character typed with `AltGr` runs only its own shortcut, as in Windows (`AltGr` is
+    `Ctrl+Alt` there): `AltGr+Q` types `@` on a German keyboard, which is `√x`, not `x²` too.
+    A dead key's letter keeps its key (`´` then `E` types `é` and is `exp`, and `´` then `Q`
+    types `´q` and is `x²`).
 - **Differences:** the key labels and the menus' icons are Segoe UI text and drawings, since
   Windows takes them from the Calculator's own icon font. The flyouts don't dim the rows above
   them (Windows lays a smoke layer over them).
