@@ -1138,8 +1138,9 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
   - Narrator reads results and button names (`±` as "positive negative").
   - Every control has Windows' `AutomationProperties.Name` in the interface language: the keys,
     the memory buttons, "Open history flyout", "Standard Calculator" in the menu, "From" for a
-    date picker, "Convert from 5 Kilometers" for a converter value, and so on. Drop-downs report
-    their value, and tabs, list items and radio buttons whether they're selected.
+    date picker, "Convert from 5 Kilometers" for the converter value being typed into (the other
+    is "Converts into …", and their unit pickers "Input unit" and "Output unit"), and so on.
+    Drop-downs report their value, and tabs, list items and radio buttons whether they're selected.
   - The display ("Display is 7", "Display is 5 point" while typing a decimal point), the date
     results ("Difference 1 week", "Resulting date …") and the converted value are live regions
     that Narrator reads when they change.
