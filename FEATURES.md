@@ -299,7 +299,8 @@ UI code and is covered by unit tests.*
   - All hotkeys work without focusing a button, and the pressed key's button flashes.
   - While the history or memory flyout is open, the keypad and memory keys do nothing
     (`EnableControls(false)`); `Esc`, `Ctrl+H`, `Ctrl+Shift+D`, copy and paste still work.
-  - `Alt` with any other key types nothing.
+  - `Alt` with any other key types nothing. On a Mac, Option types its character (Option+L is
+    `@` on a German keyboard), and only the mode keys type nothing.
   - Buttons never take keyboard focus, so `Enter` always means `=` (see AGENTS.md pitfalls).
 
 #### `FEAT-STD-006` Clipboard Copy and Paste (numbers)
