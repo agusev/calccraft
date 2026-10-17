@@ -306,6 +306,8 @@ pub(super) struct GraphingState {
     pub(super) active: Option<u64>,
     /// The graph options' window boxes (X-Min, X-Max, Y-Min, Y-Max) while edited.
     pub(super) range_texts: [String; 4],
+    /// The window boxes whose text was typed, kept until the four make a window.
+    range_kept: [bool; 4],
     /// Active tracing (the tracing button), and where its pointer is, relative to the
     /// graph.
     pub(super) tracing: bool,
@@ -343,6 +345,7 @@ impl GraphingState {
             trig_hyperbolic: false,
             active: None,
             range_texts: Default::default(),
+            range_kept: [false; 4],
             tracing: false,
             trace_at: None,
             trace_moved: 0.0,
@@ -509,6 +512,47 @@ impl GraphingState {
     pub(super) fn reset_view(&mut self) {
         self.manual = false;
         self.fitted = None;
+    }
+
+    /// Reads the graph options' window boxes (`focused` is the one with the focus) and
+    /// moves the view when they make a window (`UpdateDisplayRange`). Returns the boxes
+    /// that show an error.
+    pub(super) fn update_range(&mut self, focused: Option<usize>) -> [bool; 4] {
+        let v = self.view;
+        let values = [v.x_min, v.x_max, v.y_min, v.y_max];
+        let mut parsed = [None; 4];
+        for k in 0..4 {
+            // Windows keeps what is typed in the boxes (`GraphingSettingsViewModel`): a
+            // minimum typed above its maximum stays, as an error, until the four make a
+            // window. The other boxes show the view, and so does an emptied one (the
+            // flyout empties them when it opens and on "Reset view").
+            if Some(k) == focused {
+                self.range_kept[k] = true;
+            } else if !self.range_kept[k] || self.range_texts[k].is_empty() {
+                self.range_kept[k] = false;
+                self.range_texts[k] = numbers().localize_plain(&g6(values[k]));
+            }
+            parsed[k] = range_value(&self.range_texts[k], values[k], self.range_kept[k]);
+        }
+        let errors = range_errors(parsed);
+        if let [Some(a), Some(b), Some(c), Some(d)] = parsed
+            && !errors.contains(&true)
+        {
+            // `range_errors` checked that the graph can draw both pairs.
+            let new = View {
+                x_min: a,
+                x_max: b,
+                y_min: c,
+                y_max: d,
+            };
+            if new != self.view {
+                self.view = new;
+                self.manual = true;
+            }
+            // The view has the window: the boxes show it again.
+            self.range_kept = [false; 4];
+        }
+        errors
     }
 }
 
@@ -1863,9 +1907,8 @@ impl CalculatorApp {
             tr("GraphSettingsYMin.Header"),
             tr("GraphSettingsYMax.Header"),
         ];
-        let view = self.graphing.view;
-        let values = [view.x_min, view.x_max, view.y_min, view.y_max];
-        let mut parsed = [None; 4];
+        let focused = (0..4).find(|&k| ui.ctx().memory(|m| m.has_focus(range_id(k))));
+        let errors = self.graphing.update_range(focused);
         for (k, header) in headers.iter().enumerate() {
             let x = inner.left() + (k % 2) as f32 * (half + 10.0);
             let top = y + (k / 2) as f32 * 62.0;
@@ -1877,24 +1920,7 @@ impl CalculatorApp {
                 p.text_secondary,
             );
             let field = Rect::from_min_size(pos2(x, top + 20.0), vec2(half.min(160.0), 32.0));
-            parsed[k] = self.range_box(ui, k, field, values[k], header);
-        }
-        // A changed box moves the view right away (`UpdateDisplayRange`), when all four
-        // make sense.
-        if let [Some(a), Some(b), Some(c), Some(d)] = parsed
-            && a < b
-            && c < d
-        {
-            let new = View {
-                x_min: a,
-                x_max: b,
-                y_min: c,
-                y_max: d,
-            };
-            if new != self.graphing.view && new.is_valid() {
-                self.graphing.view = new;
-                self.graphing.manual = true;
-            }
+            self.range_box(ui, k, field, errors[k], header);
         }
         // Units.
         y += 136.0;
@@ -2113,24 +2139,12 @@ impl CalculatorApp {
         false
     }
 
-    /// One of the window boxes. Returns its number while it holds one.
-    fn range_box(
-        &mut self,
-        ui: &mut Ui,
-        k: usize,
-        rect: Rect,
-        value: f64,
-        name: &str,
-    ) -> Option<f64> {
+    /// One of the window boxes, red while `error`.
+    fn range_box(&mut self, ui: &mut Ui, k: usize, rect: Rect, error: bool, name: &str) {
         let p = self.palette;
-        let id = Id::new("graph-range-box").with(k);
+        let id = range_id(k);
         let focused = ui.ctx().memory(|m| m.has_focus(id));
-        if !focused {
-            self.graphing.range_texts[k] = numbers().localize_plain(&g6(value));
-        }
-        let parsed = range_value(&self.graphing.range_texts[k], value, focused);
         let painter = ui.painter().clone();
-        let error = parsed.is_none();
         let fill = if error {
             p.error_fill
         } else if focused {
@@ -2170,10 +2184,9 @@ impl CalculatorApp {
             .widget_info(|| WidgetInfo::labeled(WidgetType::TextEdit, true, name));
         if output.response.response.lost_focus() && ui.ctx().input(|i| i.key_pressed(Key::Enter)) {
             // Enter moves to the next box (`GridSettingsTextBox_PreviewKeyDown`).
-            let next = Id::new("graph-range-box").with((k + 1) % 4);
+            let next = range_id((k + 1) % 4);
             ui.ctx().memory_mut(|m| m.request_focus(next));
         }
-        parsed
     }
 
     /// The line options flyout (`EquationStylePanelControl`): 14 colors and, except for
@@ -2663,6 +2676,11 @@ pub(super) fn edit_id(row: u64) -> Id {
     Id::new("graph-equation").with(row)
 }
 
+/// The id of a window box of the graph options: 0 is X-Min, then X-Max, Y-Min, Y-Max.
+fn range_id(k: usize) -> Id {
+    Id::new("graph-range-box").with(k)
+}
+
 /// A child `Ui` for a text box at `rect`, with the selection and caret in the app's
 /// colors. Unlike `scope_builder`, it doesn't move the parent's layout cursor, which
 /// matters in the scrolling lists.
@@ -2677,8 +2695,8 @@ fn text_ui(ui: &mut Ui, rect: Rect, p: &super::palette::Palette) -> Ui {
 /// What a window box holds: the view's `value` until something else is typed in it, or
 /// `None` while the text isn't a number. The box shows the value with 6 digits, so
 /// reading that text back would move the view by a click into the box.
-fn range_value(text: &str, value: f64, focused: bool) -> Option<f64> {
-    if !focused || text.trim() == numbers().localize_plain(&g6(value)) {
+fn range_value(text: &str, value: f64, typed: bool) -> Option<f64> {
+    if !typed || text.trim() == numbers().localize_plain(&g6(value)) {
         return Some(value);
     }
     numbers()
@@ -2686,6 +2704,37 @@ fn range_value(text: &str, value: f64, focused: bool) -> Option<f64> {
         .parse::<f64>()
         .ok()
         .filter(|v| v.is_finite())
+}
+
+/// The window boxes that show an error, as Windows' `SelectTextBoxStyle` picks them: one
+/// that isn't a number (`XMinError` …), and both boxes of a pair whose minimum isn't
+/// below its maximum (`XError`, `YError`). A pair the graph can't draw (`View::is_valid`:
+/// a span over 1e100, or too small for doubles) is one too, as the view can't take it.
+fn range_errors(values: [Option<f64>; 4]) -> [bool; 4] {
+    let mut errors = values.map(|v| v.is_none());
+    for min in [0, 2] {
+        if let (Some(a), Some(b)) = (values[min], values[min + 1]) {
+            // The pair with the default view's other one, which can be drawn.
+            let pair = if min == 0 {
+                View {
+                    x_min: a,
+                    x_max: b,
+                    ..View::DEFAULT
+                }
+            } else {
+                View {
+                    y_min: a,
+                    y_max: b,
+                    ..View::DEFAULT
+                }
+            };
+            if a >= b || !pair.is_valid() {
+                errors[min] = true;
+                errors[min + 1] = true;
+            }
+        }
+    }
+    errors
 }
 
 /// Where the list of a drop-down with `items` 36 px items opens: under its combo box,
@@ -2986,6 +3035,67 @@ mod tests {
         assert_eq!(range_value(&shown(-20.0), x, true), Some(-20.0));
         assert_eq!(range_value("", x, true), None);
         assert_eq!(range_value("", x, false), Some(x));
+    }
+
+    #[test]
+    fn range_boxes_keep_a_minimum_above_the_maximum() {
+        // An empty graph's options (x from −10 to 10): X-Min 20, Tab, X-Max 30, Tab.
+        let mut g = GraphingState::new();
+        g.update_range(None);
+        g.range_texts[0] = "20".into();
+        g.update_range(Some(0));
+        // X-Min keeps what was typed, and both X boxes show the error, as in Windows.
+        let errors = g.update_range(Some(1));
+        assert_eq!(g.range_texts[0], "20");
+        assert_eq!(errors, [true, true, false, false]);
+        g.range_texts[1] = "30".into();
+        assert_eq!(g.update_range(Some(1)), [false; 4]);
+        g.update_range(Some(2));
+        assert_eq!((g.view.x_min, g.view.x_max), (20.0, 30.0));
+        assert_eq!(g.range_texts[..2], ["20", "30"]);
+    }
+
+    #[test]
+    fn range_boxes_keep_a_window_the_graph_cant_draw() {
+        // X-Max 1e101 is in order, but the graph draws spans up to 1e100 (`is_valid`):
+        // it stays, as an error, rather than being dropped.
+        let mut g = GraphingState::new();
+        g.update_range(None);
+        g.range_texts[1] = "1e101".into();
+        g.update_range(Some(1));
+        let errors = g.update_range(Some(2));
+        assert_eq!(g.range_texts[1], "1e101");
+        assert_eq!(errors, [true, true, false, false]);
+        assert_eq!(g.view, View::DEFAULT);
+        // So does a span too small for doubles.
+        g.range_texts[1] = "10".into();
+        g.range_texts[3] = "-9.99999999999".into();
+        assert_eq!(g.update_range(Some(3)), [false, false, true, true]);
+        assert_eq!(g.update_range(None), [false, false, true, true]);
+        assert_eq!(g.range_texts[3], "-9.99999999999");
+    }
+
+    #[test]
+    fn range_boxes_start_over_on_reset_view() {
+        let mut g = GraphingState::new();
+        g.update_range(None);
+        g.range_texts[0] = "20".into();
+        g.update_range(Some(0));
+        // "Reset view" while X-Max has the focus empties the boxes, and the view is
+        // fitted again before they're read next.
+        g.update_range(Some(1));
+        g.reset_view();
+        g.range_texts = Default::default();
+        g.update_range(Some(1));
+        let fitted = View {
+            x_min: -12.0,
+            ..View::DEFAULT
+        };
+        g.view = fitted;
+        assert_eq!(g.update_range(None), [false; 4]);
+        assert_eq!(g.view, fitted);
+        assert!(!g.manual);
+        assert_eq!(g.range_texts[0], "-12");
     }
 
     #[test]

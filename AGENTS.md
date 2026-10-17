@@ -500,6 +500,9 @@ These come from the Windows Calculator source and calc.exe, and are pinned by th
   around; a step of 0 or less is refused. Values are shown with 6 significant digits ("G6").
 - An empty graph shows −10 to 10 on both axes. The automatic view of x² in a 2140 × 1308 graph
   is x from −27.2204 to 27.2204 and y from −3.025 to 30.25, as in calc.exe.
+- The graph options' window boxes keep what is typed (`GraphingSettingsViewModel`): a minimum
+  at or above its maximum marks both boxes as errors, and the view waits for the pair to be in
+  order (X-Min 20, then X-Max 30, gives x from 20 to 30).
 - The grid labels at most 7 intervals of 1, 2 or 5 times a power of ten, with lines at a fifth
   of them (a fourth for 2s): 10 and 2 for x from −27 to 27, 5 and 1 for y from −3 to 30.
 - The wheel zooms by 15 % a notch around the pointer; the buttons by 1.0625 from the center.
