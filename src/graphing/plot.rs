@@ -546,6 +546,7 @@ pub fn is_dashed(relation: Relation) -> bool {
 pub struct TracePoint {
     /// The index of the equation in the list passed to `trace`.
     pub equation: usize,
+    /// x rounded to the view's precision, ready to be shown.
     pub x: f64,
     pub y: f64,
     /// Where it is, in pixels.
@@ -581,9 +582,8 @@ pub fn trace(
         }
     }
     let (_, k, p) = best?;
-    let precision = view.precision();
     let (x, y) = view.point_at(p[0] as f64, p[1] as f64, w, h);
-    let x = (x / precision).round() * precision;
+    let x = rounded(x, view.precision());
     let y = match &equations[k].0.shape {
         Shape::Function(f) => f.eval(x, 0.0, env),
         _ => y,
@@ -599,6 +599,18 @@ pub fn trace(
         px: sx as f32,
         py: sy as f32,
     })
+}
+
+/// x rounded to the view's precision so that it prints as short as it is: 382 / 100 is
+/// the double nearest 3.82, 382 × 0.01 isn't. The tracer shows f at this x, so y has to
+/// be computed from it and not from a neighbor that prints the same.
+fn rounded(x: f64, precision: f64) -> f64 {
+    let steps = (x / precision).round();
+    if precision < 1.0 {
+        steps / (1.0 / precision).round()
+    } else {
+        steps * precision
+    }
 }
 
 fn nearest_on_segment(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> [f32; 2] {
@@ -1103,6 +1115,32 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn traced_values_are_of_the_x_shown() {
+        // Windows shows (3.82, 14.592400000000000) for x² near (3.95, 14.6): y is the
+        // value at the double nearest 3.82, not at 382 × 0.01 = 3.8200000000000003.
+        let eq = equation("x^2");
+        let view = View {
+            x_min: -27.2204,
+            x_max: 27.2204,
+            y_min: -3.025,
+            y_max: 30.25,
+        };
+        let (w, h) = (2140.0, 1308.0);
+        let p = plot(&eq, &Env::RADIANS, &view, w, h);
+        let traced = |x: f64, y: f64| {
+            let (px, py) = view.px_of(x, y, w, h);
+            let at = (px as f32, py as f32);
+            trace(&[(&eq, &p)], &Env::RADIANS, &view, w, h, at.0, at.1).unwrap()
+        };
+        let point = traced(3.95, 14.6);
+        assert_eq!((point.x, point.y), (3.82, 3.82 * 3.82));
+        let point = traced(-5.1, 26.01);
+        assert_eq!((point.x, point.y), (-5.1, 5.1 * 5.1));
+        assert_eq!(rounded(3.8213, 0.01).to_string(), "3.82");
+        assert_eq!(rounded(1234.0, 10.0), 1230.0);
     }
 
     #[test]
