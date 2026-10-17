@@ -282,7 +282,8 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   `Relation`. Other letters are free variables (`variables`).
 - `expr` evaluates in `f64` (Windows' graphs use doubles too): `real_pow` gives negative bases
   real odd roots (`(−8)^(1/3)` is −2), trigonometry follows the angle unit, and what isn't real is
-  NaN. `derivative` is symbolic (the analysis needs f′ and f″); factorials have none.
+  NaN. `factorial` is exact for whole numbers up to 170! (rounded once beyond 22!), the gamma
+  function otherwise. `derivative` is symbolic (the analysis needs f′ and f″); factorials have none.
 - `plot` works in pixels of the graph. Functions are sampled about once a pixel and subdivided
   where they bend; a jump of more than a quarter of the height at the last subdivision breaks the
   line (tan's asymptotes), and a domain edge is found by bisection (√x starts at 0). Implicit
