@@ -190,7 +190,8 @@ In the graphing mode, the keyboard types into the equation box with the focus, a
 
 In the converters, the digits, `.` or `,`, `Backspace` and `Delete` (`CE`) work as above,
 `F9` or `-` changes the sign (Temperature, Power and Angle only), `Ctrl+C` copies the active
-value, `Ctrl+V` pastes a number, and `Esc` closes an open unit list.
+value, `Ctrl+V` pastes a number, and `Esc` closes an open unit list or menu, or else is `CE` too,
+as in Windows.
 
 ## Requirements
 
