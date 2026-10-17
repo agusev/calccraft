@@ -711,6 +711,7 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
   buttons, and the years/months/days boxes open 0–999 lists.
 - **Acceptance Criteria:**
   - Sizes from `DateCalculator.xaml`; the result font is 20 px from a 480 px window width, 14 px below.
+  - The From date goes along when switching pages, as in Windows (`DateCalcOption_Changed`).
   - The calendar works with its arrows and the mouse wheel; `Esc` closes popups; `Ctrl+C` copies the result.
   - Both themes.
 - **Differences:** always the Gregorian calendar. Date formats, month and weekday names and the

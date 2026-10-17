@@ -516,7 +516,8 @@ These come from the Windows Calculator source and calc.exe, and are pinned by th
 
 ### Date calculation
 
-These come from the Windows Calculator source and are pinned by the tests in `dates.rs`:
+These come from the Windows Calculator source and are pinned by the tests in `dates.rs` and
+`app/date_view.rs`:
 
 - The difference ignores the order of the dates. It counts whole years, then whole months from
   where the years ended, then weeks (7 days), and the rest is days.
@@ -534,6 +535,9 @@ These come from the Windows Calculator source and are pinned by the tests in `da
   `Date out of Bound`. The offsets go from 0 to 999.
 - Formats: pickers show `October 15, 2026`, and the add/subtract result shows
   `Thursday, October 15, 2026` (in en-US; see "Regional formats").
+- The From date goes along when switching pages (`DateCalcOption_Changed`): picking
+  January 15, 2020 in "Difference between dates" makes it the From date of "Add or subtract
+  days" too, and back. The To date stays on its page.
 
 ### Unit converters
 
