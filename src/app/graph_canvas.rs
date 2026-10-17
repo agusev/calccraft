@@ -78,17 +78,6 @@ pub(super) fn trace_text(x: f64, y: f64) -> String {
     format!("({x}, {y})")
 }
 
-/// x rounded to the view's precision so that it prints as short as it is: 382 / 100 is
-/// the double nearest 3.82, 382 × 0.01 isn't.
-fn rounded(x: f64, precision: f64) -> f64 {
-    let steps = (x / precision).round();
-    if precision < 1.0 {
-        steps / (1.0 / precision).round()
-    } else {
-        steps * precision
-    }
-}
-
 impl CalculatorApp {
     /// Draws the graph in `rect`. Without `controls` (a copy of the graph) it draws only
     /// the graph itself.
@@ -365,8 +354,7 @@ impl CalculatorApp {
         if let Some((point, color)) = traced {
             let at = rect.min + vec2(point.px, point.py);
             painter.circle_filled(at, self.graphing.line_width + 1.0, color);
-            let x = rounded(point.x, view.precision());
-            self.paint_trace_popup(ui, rect, at, &trace_text(x, point.y));
+            self.paint_trace_popup(ui, rect, at, &trace_text(point.x, point.y));
         }
         if let Some(at) = trace_at {
             paint_trace_pointer(&painter, rect.min + at.to_vec2());
@@ -915,10 +903,7 @@ mod tests {
     #[test]
     fn traced_values() {
         // Windows shows (3.82, 14.592400000000000).
-        let x = rounded(3.8213, 0.01);
-        assert_eq!(x.to_string(), "3.82");
-        assert_eq!(trace_text(x, x * x), "(3.82, 14.592400000000000)");
-        assert_eq!(rounded(1234.0, 10.0), 1230.0);
+        assert_eq!(trace_text(3.82, 3.82 * 3.82), "(3.82, 14.592400000000000)");
     }
 
     #[test]
