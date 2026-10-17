@@ -183,7 +183,9 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   `handle_date_keyboard` and `handle_converter_keyboard`, so calculator keys do nothing there, and
   the Graphing mode `handle_graphing_keyboard` (its text boxes take the typing).
   `handle_mode_keys` (`Alt+1` … `Alt+5`, `Ctrl+E`, from Windows' `NavCategory`) runs first in
-  every mode, and takes the text of every `Alt` chord (Windows types nothing for them). With the
+  every mode, and takes the text of every `Alt` chord (Windows types nothing for them; on a Mac
+  only the mode keys' text, since Option types characters there, like `@` on German keyboards).
+  With the
   menu or a context menu open, only `Esc` reaches the calculator (the converters too); an open
   history or memory flyout disables the keypad and memory keys (`keypad_disabled`, Windows'
   `EnableControls(false)`), and keep-on-top turns the `Ctrl` shortcuts off. egui's own

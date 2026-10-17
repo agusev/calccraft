@@ -2929,7 +2929,7 @@ fn repaint_for_flash<C>(ctx: &Context, flash: &mut Option<(C, f64)>, now: f64) {
 
 /// Removes the mode shortcuts (`Alt` + digit, `Ctrl+E`) from `events` and returns the
 /// mode the first one opens. `Ctrl+Alt` is `AltGr`, which types characters, so it's left
-/// alone. Text that comes with any `Alt` chord goes too.
+/// alone. Text that comes with any `Alt` chord goes too, but on a Mac only the mode keys'.
 fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
     let mut chosen = None;
     let mut consumed = false;
@@ -2941,9 +2941,11 @@ fn take_mode_shortcut(events: &mut Vec<Event>) -> Option<Mode> {
             ..
         } if modifiers.alt && !modifiers.ctrl => {
             // In Windows an Alt chord is a system key and types nothing, but egui-winit
-            // still sends the key's text along.
-            consumed |= *pressed;
-            match Mode::for_alt_key(*key) {
+            // still sends the key's text along. A Mac's Option key types characters (`@` is
+            // Option+L on a German keyboard), so there only the mode keys type nothing.
+            let mode = Mode::for_alt_key(*key);
+            consumed |= *pressed && (mode.is_some() || !cfg!(target_os = "macos"));
+            match mode {
                 Some(mode) => {
                     chosen = chosen.or(pressed.then_some(mode));
                     false
@@ -3284,10 +3286,10 @@ mod tests {
         assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Graphing));
         assert!(events.is_empty());
 
-        // Alt+6 is no mode, and types nothing either.
+        // Alt+6 is no mode, and types nothing either (Option+6 types on a Mac).
         let mut events = vec![key(Key::Num6, Modifiers::ALT), Event::Text("6".into())];
         assert_eq!(take_mode_shortcut(&mut events), None);
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), if cfg!(target_os = "macos") { 2 } else { 1 });
         assert!(matches!(events[0], Event::Key { .. }));
     }
 
@@ -3305,5 +3307,22 @@ mod tests {
         let mut events = vec![key(Key::Num5, Modifiers::NONE), Event::Text("5".into())];
         assert_eq!(take_mode_shortcut(&mut events), None);
         assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn option_chords_type_on_a_mac() {
+        // Option types characters on a Mac: Option+L is `@` (√x) and Option+5 `[` (⌊x⌋) on a
+        // German keyboard, where egui reports the latter as the `[` key. In Windows an Alt
+        // chord types nothing.
+        for (pressed, text) in [(Key::L, "@"), (Key::OpenBracket, "[")] {
+            let mut events = vec![key(pressed, Modifiers::ALT), Event::Text(text.into())];
+            assert_eq!(take_mode_shortcut(&mut events), None);
+            let typed = events.contains(&Event::Text(text.into()));
+            assert_eq!(typed, cfg!(target_os = "macos"), "{pressed:?} {text}");
+        }
+        // The mode keys never type: Option+1 is `¡` on a US Mac keyboard.
+        let mut events = vec![key(Key::Num1, Modifiers::ALT), Event::Text("¡".into())];
+        assert_eq!(take_mode_shortcut(&mut events), Some(Mode::Standard));
+        assert!(events.is_empty());
     }
 }
