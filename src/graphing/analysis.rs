@@ -444,9 +444,79 @@ fn zeros(g: &dyn Fn(f64) -> f64, dg: Option<&dyn Fn(f64) -> f64>, xs: &[f64]) ->
     dedupe(out)
 }
 
-/// The sign of `d` just left of `c`: whether a turning point there is a minimum.
-fn falls_before(d: &dyn Fn(f64) -> f64, c: f64) -> bool {
-    d(c - 1e-7 * c.abs().max(1.0)) < 0.0
+/// The ends of the flat pieces of f, where f′ is exactly 0 at two samples or more in a
+/// row (|x − 1| + |x + 1| on [−1, 1]), which `sign_changes` doesn't see. Each end comes
+/// with whether it's a minimum (`Some(true)`), a maximum (`Some(false)`) or neither
+/// (`None`, a step: f rises, or falls, on both sides of the piece). A side without a
+/// slope doesn't count: where f′ is undefined (but for a cusp, past which the next
+/// sample counts) or below 1e-12 (rounding noise, or e^(−x²)′ underflowing beyond
+/// |x| ≈ 27), beyond a pole, and past the end of `xs`, where an `open` piece stays
+/// flat; without `open`, pieces that reach the end of `xs` are left out.
+fn flat_ends(fun: &Fun, xs: &[f64], open: bool) -> Vec<(f64, Option<bool>)> {
+    let values: Vec<f64> = xs.iter().map(|&x| fun.d1(x)).collect();
+    // The end between sample `slope`, where f′ isn't 0, and sample `flat`, by
+    // bisection, with whether f rises at `slope`; `None` if that side doesn't count.
+    let side = |slope: usize, flat: usize| {
+        let mut v = values[slope];
+        // A cusp has no slope at its sample (x^(1/3) − |x^(1/3)| at 0): take the next.
+        if !v.is_finite() && fun.defined(xs[slope]) {
+            let next = if slope < flat {
+                slope.checked_sub(1)
+            } else {
+                Some(slope + 1).filter(|&k| k < xs.len())
+            };
+            v = next.map_or(f64::NAN, |k| values[k]);
+        }
+        if !v.is_finite() || v.abs() < 1e-12 {
+            return None;
+        }
+        let (mut a, mut b) = (xs[slope], xs[flat]);
+        for _ in 0..80 {
+            let m = (a + b) / 2.0;
+            if m == a || m == b {
+                break;
+            }
+            if fun.d1(m) == 0.0 {
+                b = m;
+            } else {
+                a = m;
+            }
+        }
+        (fun.defined(a) && fun.defined(b)).then_some((b, v > 0.0))
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < xs.len() {
+        if values[i] != 0.0 {
+            i += 1;
+            continue;
+        }
+        let first = i;
+        while i + 1 < xs.len() && values[i + 1] == 0.0 {
+            i += 1;
+        }
+        let last = i;
+        i += 1;
+        // A single zero is a turning point or a touching zero of f′ (x³ at 0); zeros
+        // with slopes between them aren't flat either.
+        if last == first
+            || (!open && (first == 0 || last + 1 == xs.len()))
+            || (first..last).any(|k| fun.d1((xs[k] + xs[k + 1]) / 2.0) != 0.0)
+        {
+            continue;
+        }
+        let before = (first > 0).then(|| side(first - 1, first)).flatten();
+        let after = (last + 1 < xs.len())
+            .then(|| side(last + 1, last))
+            .flatten();
+        let kind = match (before.map(|b| b.1), after.map(|a| a.1)) {
+            (Some(false) | None, Some(true) | None) => Some(true),
+            (Some(true) | None, Some(false) | None) => Some(false),
+            _ => None,
+        };
+        out.extend(before.iter().chain(&after).map(|&(x, _)| (x, kind)));
+    }
+    out
 }
 
 fn dedupe(mut v: Vec<f64>) -> Vec<f64> {
@@ -890,17 +960,32 @@ fn aperiodic(fun: &Fun) -> Option<Features> {
         features.x_intercepts = Some(parts.join(", "));
     }
 
-    // Turning points, where f′ changes sign (through ∞ at a cusp).
+    // Turning points, where f′ changes sign (through ∞ at a cusp), and the ends of flat
+    // pieces; `steps` are the ends of the flat pieces that f rises (or falls) across. A
+    // turning point is a minimum if f falls at the sample before it (right before it, f
+    // may be flat).
     let mut turns: Vec<(f64, bool)> = sign_changes(&d1, &xs, true)
         .into_iter()
-        .map(|(c, _, _)| (c, falls_before(&d1, c)))
+        .map(|(c, before, _)| (c, d1(before) < 0.0))
         .filter(|&(c, _)| inside(c) && fun.defined(c))
         .collect();
-    let too_many_turns = turns.len() > 20;
+    let mut steps = Vec::new();
+    for (c, minimum) in flat_ends(fun, &xs, true)
+        .into_iter()
+        .filter(|&(c, _)| inside(c))
+    {
+        match minimum {
+            Some(minimum) => turns.push((c, minimum)),
+            None => steps.push(c),
+        }
+    }
+    turns.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let too_many_turns = turns.len() + steps.len() > 20;
     if !too_many_turns {
         for turn in &mut turns {
             turn.0 = exact::snap(turn.0, TIGHT);
         }
+        steps = snapped(steps);
     }
     if too_many_turns {
         features.too_complex.extend([
@@ -1003,10 +1088,11 @@ fn aperiodic(fun: &Fun) -> Option<Features> {
         features.too_complex.push(Feature::Range);
     }
 
-    // Monotonicity between the turning points.
+    // Monotonicity between the turning points and steps.
     for i in &intervals {
+        let inner = turns.iter().map(|t| t.0).chain(steps.iter().copied());
         let mut cuts = vec![i.lo];
-        cuts.extend(turns.iter().map(|t| t.0).filter(|&c| c > i.lo && c < i.hi));
+        cuts.extend(dedupe(inner.filter(|&c| c > i.lo && c < i.hi).collect()));
         cuts.push(i.hi);
         for pair in cuts.windows(2) {
             let direction = direction_between(fun, pair[0], pair[1]);
@@ -1034,9 +1120,11 @@ fn direction_between(fun: &Fun, a: f64, b: f64) -> Direction {
         .map(|&x| fun.d1(x))
         .filter(|s| s.is_finite())
         .collect();
+    // A slope of 0 votes for neither (f64::signum(0.0) is 1).
+    let vote = |s: &f64| (*s > 0.0) as i32 - (*s < 0.0) as i32;
     if slopes.iter().all(|s| s.abs() < 1e-12) {
         Direction::Constant
-    } else if slopes.iter().map(|s| s.signum()).sum::<f64>() > 0.0 {
+    } else if slopes.iter().map(vote).sum::<i32>() > 0 {
         Direction::Increasing
     } else {
         Direction::Decreasing
@@ -1263,19 +1351,27 @@ fn periodic(fun: &Fun, p: f64) -> Features {
         features.x_intercepts = Some(format!("{{{}, n₁ ∈ ℤ}}", parts.join(", ")));
     }
 
-    // Turning points and their kind, in one period.
-    let positions = in_period(
-        sign_changes(&d1, &xs, true)
-            .into_iter()
-            .map(|c| c.0)
-            .collect(),
-        p,
-    );
-    let turns: Vec<(f64, bool)> = positions
-        .iter()
-        .map(|&x| (x, falls_before(&d1, x)))
+    // Turning points and their kind (as in `aperiodic`), in one period, and the ends of
+    // flat pieces (|sin x| + sin x on [π, 2π]), found on three periods so that every
+    // piece is seen whole.
+    let mut turns: Vec<(f64, bool)> = sign_changes(&d1, &xs, true)
+        .into_iter()
+        .map(|(c, before, _)| (in_period(vec![c], p)[0], d1(before) < 0.0))
         .filter(|&(x, _)| defined(x))
         .collect();
+    let wide: Vec<f64> = (0..=3 * N)
+        .map(|i| p * (i as f64 / N as f64 - 1.0))
+        .collect();
+    let mut steps = Vec::new();
+    for (x, minimum) in flat_ends(fun, &wide, false) {
+        let x = in_period(vec![x], p)[0];
+        match minimum {
+            Some(minimum) => turns.push((x, minimum)),
+            None => steps.push(x),
+        }
+    }
+    turns.sort_by(|a, b| a.0.total_cmp(&b.0));
+    turns.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * p);
     for minimum in [true, false] {
         let points: Vec<f64> = turns
             .iter()
@@ -1378,12 +1474,13 @@ fn periodic(fun: &Fun, p: f64) -> Features {
         features.too_complex.push(Feature::Range);
     }
 
-    // Monotonicity between the turning points and poles, from the first one at or
+    // Monotonicity between the turning points, steps and poles, from the first one at or
     // after 0, around one period.
     let mut cuts: Vec<f64> = turns
         .iter()
         .map(|t| t.0)
         .chain(excluded.iter().copied())
+        .chain(steps)
         .collect();
     cuts = dedupe(cuts);
     if cuts.is_empty() {
@@ -1758,6 +1855,117 @@ mod tests {
                 ("(−∞, 0)", Direction::Constant),
                 ("(0, ∞)", Direction::Constant)
             ]
+        );
+    }
+
+    #[test]
+    fn flat_pieces() {
+        // f′ is exactly 0 on [−1, 1]: the ends of the flat piece are its minima.
+        let f = analyze_text("y=|x-1|+|x+1|");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [2, ∞)}"));
+        assert_eq!(f.minima, vec!["(−1, 2)", "(1, 2)"]);
+        assert!(f.maxima.is_empty());
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, −1)", Direction::Decreasing),
+                ("(−1, 1)", Direction::Constant),
+                ("(1, ∞)", Direction::Increasing)
+            ]
+        );
+        let f = analyze_text("y=|x|+|x-2|");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [2, ∞)}"));
+        assert_eq!(f.minima, vec!["(0, 2)", "(2, 2)"]);
+        let f = analyze_text("y=|x^2-1|+|x^2-4|");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [3, ∞)}"));
+        assert_eq!(f.minima, vec!["(−2, 3)", "(−1, 3)", "(1, 3)", "(2, 3)"]);
+        assert_eq!(f.maxima, vec!["(0, 5)"]);
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, −2)", Direction::Decreasing),
+                ("(−2, −1)", Direction::Constant),
+                ("(−1, 0)", Direction::Increasing),
+                ("(0, 1)", Direction::Decreasing),
+                ("(1, 2)", Direction::Constant),
+                ("(2, ∞)", Direction::Increasing)
+            ]
+        );
+        // Flat out to ±∞: the values −4 and 4 are taken, not only approached.
+        let f = analyze_text("y=|x+2|-|x-2|");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [−4, 4]}"));
+        assert_eq!(f.minima, vec!["(−2, −4)"]);
+        assert_eq!(f.maxima, vec!["(2, 4)"]);
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, −2)", Direction::Constant),
+                ("(−2, 2)", Direction::Increasing),
+                ("(2, ∞)", Direction::Constant)
+            ]
+        );
+        // A flat step on the way up is no extremum.
+        let f = analyze_text("y=x+(|x-1|-|x+1|)/2");
+        assert!(f.minima.is_empty() && f.maxima.is_empty());
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, −1)", Direction::Increasing),
+                ("(−1, 1)", Direction::Constant),
+                ("(1, ∞)", Direction::Increasing)
+            ]
+        );
+        // Flat between two samples: f′ is 0 right before the minimum.
+        let f = analyze_text("y=|x-0.001|+|x+0.001|");
+        assert_eq!(f.minima, vec!["(0, 0.002)"]);
+        assert!(f.maxima.is_empty());
+        // Flat from a cusp on, where f′ is undefined.
+        let f = analyze_text("y=x^(1/3)-|x^(1/3)|");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ (−∞, 0]}"));
+        assert_eq!(f.maxima, vec!["(0, 0)"]);
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, 0)", Direction::Increasing),
+                ("(0, ∞)", Direction::Constant)
+            ]
+        );
+        // e^(−x²)′ underflows to 0 beyond |x| ≈ 27, which isn't a flat piece.
+        let f = analyze_text("y=e^(-x^2)");
+        assert!(f.minima.is_empty());
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("(−∞, 0)", Direction::Increasing),
+                ("(0, ∞)", Direction::Decreasing)
+            ]
+        );
+        // Flat on (π, 2π) in every period.
+        let f = analyze_text("y=|sin(x)|+sin(x)");
+        assert_eq!(f.range.as_deref(), Some("{y ∈ [0, 2]}"));
+        assert_eq!(f.minima, vec!["{(πn₁, 0), n₁ ∈ ℤ}"]);
+        assert_eq!(f.maxima, vec!["{(2πn₁ + π/2, 2), n₁ ∈ ℤ}"]);
+        assert_eq!(
+            directions(&f),
+            vec![
+                ("{(2πn₁, 2πn₁ + π/2), n₁ ∈ ℤ}", Direction::Increasing),
+                ("{(2πn₁ + π/2, 2πn₁ + π), n₁ ∈ ℤ}", Direction::Decreasing),
+                ("{(2πn₁ + π, 2πn₁ + 2π), n₁ ∈ ℤ}", Direction::Constant)
+            ]
+        );
+    }
+
+    #[test]
+    fn zero_slopes_dont_vote() {
+        // Falling, then flat: f64::signum(0.0) is 1, which made it rising.
+        let equation = Equation::parse("y=|x-2|-|x+2|", Syntax::default()).unwrap();
+        let Shape::Function(e) = &equation.shape else {
+            unreachable!()
+        };
+        let fun = Fun::new(e, Env::RADIANS);
+        assert_eq!(
+            direction_between(&fun, 1.0, f64::INFINITY),
+            Direction::Decreasing
         );
     }
 

@@ -296,7 +296,8 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   automatic view, `grid_step` the labeled and minor grid lines, `trace` the curve point nearest
   the pointer with x rounded to `View::precision` (`RenderMain::GetPrecision`).
 - `analysis` finds the features numerically on a grid from −1000 to 1000 (`grid`), with
-  `sign_changes` (bisection; through poles for cusps when asked), touching zeros from f′,
+  `sign_changes` (bisection; through poles for cusps when asked), touching zeros from f′, the
+  ends of flat pieces where f′ is exactly 0 (`flat_ends`: |x − 1| + |x + 1| on [−1, 1]),
   limits from far-away and nearby values (`limit_of`: converged, geometric, or growing), and the
   domain from the zeros of `boundary_functions` (denominators, radicands, cos of tan's argument …)
   checked by evaluating f. A function built from trigonometric functions of linear arguments
