@@ -33,6 +33,15 @@ fn covered(ui: &Ui) -> bool {
         .unwrap_or(false)
 }
 
+/// Draws the controls that an open history or memory flyout lies over: in view, but out of
+/// the `Tab` order, since Windows' flyout covers the whole window (`Placement="Full"`).
+pub(super) fn draw_covered(ui: &Ui, draw: impl FnOnce()) {
+    let covered = covered(ui);
+    set_covered(ui.ctx(), true);
+    draw();
+    set_covered(ui.ctx(), covered);
+}
+
 /// Registers a control drawn in `rect`: clickable when enabled, focusable unless a
 /// popup covers it, and described by `info`. Draws the focus visual when it has the
 /// keyboard focus, with corners of `radius`.
