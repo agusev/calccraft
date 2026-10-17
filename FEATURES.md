@@ -1027,13 +1027,17 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
 - **Status:** `[x] COMPLETED` (for the implemented modes)
 - **Priority:** `P0`
 - **Depends On:** None
-- **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs`, `src/Calculator/Views/MainPage.xaml`
+- **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs`, `src/Calculator/Views/MainPage.xaml`,
+  `MainPage.xaml.cs` (`OnNavigatedTo`), `src/Calculator.ViewModels/ApplicationViewModel.cs` (`OnModeChanged`)
 - **Rust:** `src/app.rs` (`Mode`, `draw_navigation`, `nav_item`, `set_mode`)
 - **Description:** The ☰ menu lists the modes under a **Calculator** and a **Converter** heading,
   with Settings at the bottom. The list scrolls when the window is too short for it.
 - **Acceptance Criteria:**
   - Switching modes keeps each mode's state, except that the Standard and Programmer modes start
     over when switching between them, as in Windows; the selected mode has the accent pill.
+  - The app opens in the mode it was closed in, saved as `Mode` with Windows' id for it
+    (`NavCategory`'s `SerializationId`: `0` Standard, `1` Scientific, … `17` Graphing) in
+    `%APPDATA%\CalcCraft`. The Settings page isn't a mode: the mode under it opens.
   - Every new mode adds itself to `Mode` and to the menu.
 - **Differences:** Windows lists 18 modes: Standard, Scientific, Graphing, Programmer, Date
   calculation, and 13 converters. CalcCraft lists all but the Currency converter. Windows draws
