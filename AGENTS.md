@@ -236,7 +236,8 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   stay in view with the memory buttons disabled, and a click there closes the flyout. In the
   Standard and Programmer modes the flyout lies over the whole window, as Windows' does
   (`Placement="Full"`): the header and those rows are drawn covered (`access::draw_covered`),
-  out of the Tab order, and a click anywhere above the list closes it.
+  out of the Tab order and not clickable, not even by a screen reader, and a click anywhere
+  above the list closes it.
 
 ### `app/scientific_view.rs`
 

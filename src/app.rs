@@ -3384,6 +3384,17 @@ mod tests {
         }
     }
 
+    /// A screen reader's click on the control `id`, as Narrator sends it (AccessKit's
+    /// `Click` action), which egui takes for a real click.
+    fn screen_reader_click(id: Id) -> Event {
+        Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::Click,
+            target_node: id.accesskit_id(),
+            target_tree: egui::accesskit::TreeId::ROOT,
+            data: None,
+        })
+    }
+
     #[test]
     fn flyouts_cover_only_the_keys() {
         for mode in [Mode::Standard, Mode::Programmer] {
@@ -3496,5 +3507,60 @@ mod tests {
         let full = ctx.read_response(Id::new("full")).unwrap().rect;
         click(&ctx, &mut app, COMPACT_SIZE, full.center());
         assert!(!app.compact);
+    }
+
+    #[test]
+    fn covered_controls_ignore_screen_reader_clicks() {
+        // What the flyouts lie over: the header and the memory row, and in the Programmer
+        // mode the radix list and the row under it.
+        let standard = [
+            ("menu", Id::new("menu")),
+            ("keep on top", Id::new("keep-on-top")),
+            ("History", Id::new("history")),
+            ("MS", Id::new("memory").with(4)),
+            ("M˅", Id::new("memory-list")),
+        ];
+        let programmer = [
+            ("menu", Id::new("menu")),
+            ("HEX", Id::new("radix").with(0)),
+            (
+                "bit toggling keypad",
+                Id::new("programmer-keypad-switch").with(1),
+            ),
+            ("word size", Id::new("programmer-word-size")),
+            ("MS", programmer_view::memory_store_id()),
+            ("M˅", Id::new("memory-list")),
+        ];
+        let cases = [
+            (Mode::Standard, Flyout::History, &standard[..]),
+            (Mode::Standard, Flyout::Memory, &standard[..]),
+            (Mode::Programmer, Flyout::Memory, &programmer[..]),
+        ];
+        for (mode, flyout, controls) in cases {
+            let ctx = Context::default();
+            let mut app = start_in(&ctx);
+            app.set_mode(mode);
+            app.engine_mut().execute(Command::MemoryStore);
+            app.flyout = flyout;
+            run(&ctx, &mut app, MIN_SIZE, vec![]);
+            // Nothing may change: egui takes AccessKit's `Click` for a real click, so the
+            // controls must not sense clicks at all.
+            let state = |app: &CalculatorApp| {
+                let calc = app.engine();
+                let programmer = (app.programmer.bit_flip, calc.radix(), calc.word_size());
+                (app.flyout, app.compact, programmer, calc.memory().len())
+            };
+            let before = state(&app);
+            for &(name, id) in controls {
+                let covered = id.with("covered");
+                run(&ctx, &mut app, MIN_SIZE, vec![screen_reader_click(covered)]);
+                assert!(
+                    state(&app) == before,
+                    "{mode:?}: a screen reader's click on {name} went through"
+                );
+                let response = ctx.read_response(covered).unwrap();
+                assert!(!response.sense.senses_click(), "{mode:?}: {name}");
+            }
+        }
     }
 }
