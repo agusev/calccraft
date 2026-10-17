@@ -204,7 +204,7 @@ UI code and is covered by unit tests.*
     operation is recorded, including the intermediate ones of a chain (`1 + 2 +` records
     `1 + 2 =`). With precedence on, the entry is the whole expression (`2 + 3 × 4 =`).
   - As in Windows, `5 =` records `5 =`, and a finished function followed by a new number
-    records the function (`√(4)` → `2`).
+    or `MR` records the function with its own result (`√(4)` → `2`).
 - **Differences:** the history is not saved when the app closes, as in Windows.
 
 #### `FEAT-CORE-008` Calculation Error & Edge Case Engine
@@ -506,6 +506,10 @@ functions, after `ratpak`) and `src/engine.rs` (`Calculator::with_precedence()`)
     the keys only, and the lists wrap 32-digit results like Windows'.
   - Windows' keyboard shortcuts, screen reader names in 60 languages (59 new strings), both
     themes.
+  - A character typed with `AltGr` runs only its own shortcut, as in Windows (`AltGr` is
+    `Ctrl+Alt` there): `AltGr+Q` types `@` on a German keyboard, which is `√x`, not `x²` too.
+    A dead key's letter keeps its key (`´` then `E` types `é` and is `exp`, and `´` then `Q`
+    types `´q` and is `x²`).
 - **Differences:** the key labels and the menus' icons are Segoe UI text and drawings, since
   Windows takes them from the Calculator's own icon font. The flyouts don't dim the rows above
   them (Windows lays a smoke layer over them).
@@ -941,7 +945,10 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
   CalcCraft's `best_fit` (the key points near the origin, the values there, a tenth more where a
   curve turns, proportional axes) matches it for x² and gives similar views elsewhere. egui's
   own Ctrl + plus / minus / 0 zoom of the whole window is turned off in every mode (Windows has
-  none).
+  none). Windows' engine can refuse a zoom (`ScaleRange` returns an `HRESULT`) by rules that
+  aren't public; CalcCraft's views stay wider than 10⁻¹⁰ of their coordinates and than about
+  2 × 10⁻³⁰⁰, far from the subnormal doubles (`View::is_valid`), whether zoomed or typed into
+  X-Min … Y-Max.
 
 #### `FEAT-GRAPH-003` Interactive Curve Tracer
 - **Status:** `[x] COMPLETED`

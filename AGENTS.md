@@ -188,7 +188,12 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   history or memory flyout disables the keypad and memory keys (`keypad_disabled`, Windows'
   `EnableControls(false)`), and keep-on-top turns the `Ctrl` shortcuts off. egui's own
   `Ctrl` + plus, minus and 0 zoom is off (`zoom_with_keyboard`): Windows has none, and the graph
-  zooms with those keys.
+  zooms with those keys. A letter key pressed with `AltGr` is no key press for the calculator,
+  only the character it typed is (`remove_alt_gr_keys`; `@` on the Q key of a German keyboard):
+  Windows sees `AltGr` as `Ctrl+Alt`, which has no shortcuts, but winit reports it without
+  modifiers. The right `Alt` key's own events tell when it's down, in order with the other
+  keys; a letter key that typed only other characters than its letter (diacritics aside, so a
+  dead key's `é` and `´q` stay `E` and `Q`) counts as pressed with `AltGr` too.
 - Every interactive control goes through `access::control`, which makes it clickable and
   focusable (`Tab`, `Shift+Tab`, arrow keys: egui's own focus handling), gives it a screen
   reader description (`access::button`, `item`, `combo_box`), draws WinUI's focus visual and
@@ -294,7 +299,8 @@ tools/icon-font.py       builds assets/fonts/CalcCraftIcons.ttf from Fluent Syst
   automatic view, `grid_step` the labeled and minor grid lines, `trace` the curve point nearest
   the pointer with x rounded to `View::precision` (`RenderMain::GetPrecision`).
 - `analysis` finds the features numerically on a grid from −1000 to 1000 (`grid`), with
-  `sign_changes` (bisection; through poles for cusps when asked), touching zeros from f′,
+  `sign_changes` (bisection; through poles for cusps when asked), touching zeros from f′, the
+  ends of flat pieces where f′ is exactly 0 (`flat_ends`: |x − 1| + |x + 1| on [−1, 1]),
   limits from far-away and nearby values (`limit_of`: converged, geometric, or growing), and the
   domain from the zeros of `boundary_functions` (denominators, radicands, cos of tan's argument …)
   checked by evaluating f. A function built from trigonometric functions of linear arguments
@@ -413,8 +419,8 @@ These follow from the Windows source and are pinned by tests too:
   `2 + 3 × 4 +` shows `14`. Changing `−` to `×` in `1 + 2 −` gives `(1 + 2) ×`. `=` closes all
   open parentheses, and a number next to a parenthesis multiplies: `2(3)` → `6`.
 - The expression line writes subtraction as a hyphen: `9 - 4 =`.
-- `5 =` adds `5 =` to the history, and a finished function followed by a new number adds the
-  function (`√(4)`).
+- `5 =` adds `5 =` to the history, and a finished function followed by a new number or MR adds
+  the function with the result it showed (`√(4)` = `2`, not the recalled value).
 - After `=`, `CE` keeps the last operation: `2 + 3 =`, `CE`, `=` gives `0 + 3 =` → `3`.
 - Pasted text is checked like in `CopyPasteManager`: at most 512 characters, 100 operands and
   16 digits per operand (32 in the Scientific mode), exponents of up to 4 digits (`1.5e-3`).
@@ -503,6 +509,9 @@ These come from the Windows Calculator source and calc.exe, and are pinned by th
   around; a step of 0 or less is refused. Values are shown with 6 significant digits ("G6").
 - An empty graph shows −10 to 10 on both axes. The automatic view of x² in a 2140 × 1308 graph
   is x from −27.2204 to 27.2204 and y from −3.025 to 30.25, as in calc.exe.
+- The graph options' window boxes keep what is typed (`GraphingSettingsViewModel`): a minimum
+  at or above its maximum marks both boxes as errors, and the view waits for the pair to be in
+  order (X-Min 20, then X-Max 30, gives x from 20 to 30).
 - The grid labels at most 7 intervals of 1, 2 or 5 times a power of ten, with lines at a fifth
   of them (a fourth for 2s): 10 and 2 for x from −27 to 27, 5 and 1 for y from −3 to 30.
 - The wheel zooms by 15 % a notch around the pointer; the buttons by 1.0625 from the center.
