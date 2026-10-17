@@ -204,7 +204,7 @@ UI code and is covered by unit tests.*
     operation is recorded, including the intermediate ones of a chain (`1 + 2 +` records
     `1 + 2 =`). With precedence on, the entry is the whole expression (`2 + 3 × 4 =`).
   - As in Windows, `5 =` records `5 =`, and a finished function followed by a new number
-    records the function (`√(4)` → `2`).
+    or `MR` records the function with its own result (`√(4)` → `2`).
 - **Differences:** the history is not saved when the app closes, as in Windows.
 
 #### `FEAT-CORE-008` Calculation Error & Edge Case Engine
@@ -301,7 +301,8 @@ UI code and is covered by unit tests.*
   - All hotkeys work without focusing a button, and the pressed key's button flashes.
   - While the history or memory flyout is open, the keypad and memory keys do nothing
     (`EnableControls(false)`); `Esc`, `Ctrl+H`, `Ctrl+Shift+D`, copy and paste still work.
-  - `Alt` with any other key types nothing.
+  - `Alt` with any other key types nothing. On a Mac, Option types its character (Option+L is
+    `@` on a German keyboard), and only the mode keys type nothing.
   - Buttons never take keyboard focus, so `Enter` always means `=` (see AGENTS.md pitfalls).
 
 #### `FEAT-STD-006` Clipboard Copy and Paste (numbers)
@@ -508,6 +509,10 @@ functions, after `ratpak`) and `src/engine.rs` (`Calculator::with_precedence()`)
     the keys only, and the lists wrap 32-digit results like Windows'.
   - Windows' keyboard shortcuts, screen reader names in 60 languages (59 new strings), both
     themes.
+  - A character typed with `AltGr` runs only its own shortcut, as in Windows (`AltGr` is
+    `Ctrl+Alt` there): `AltGr+Q` types `@` on a German keyboard, which is `√x`, not `x²` too.
+    A dead key's letter keeps its key (`´` then `E` types `é` and is `exp`, and `´` then `Q`
+    types `´q` and is `x²`).
 - **Differences:** the key labels and the menus' icons are Segoe UI text and drawings, since
   Windows takes them from the Calculator's own icon font. The flyouts don't dim the rows above
   them (Windows lays a smoke layer over them).
@@ -714,6 +719,7 @@ UI in `src/app/date_view.rs`. Detailed rules: `../win-calculator/date_calculatio
   buttons, and the years/months/days boxes open 0–999 lists.
 - **Acceptance Criteria:**
   - Sizes from `DateCalculator.xaml`; the result font is 20 px from a 480 px window width, 14 px below.
+  - The From date goes along when switching pages, as in Windows (`DateCalcOption_Changed`).
   - The calendar works with its arrows and the mouse wheel; `Esc` closes popups; `Ctrl+C` copies the result.
   - Both themes.
 - **Differences:** always the Gregorian calendar. Date formats, month and weekday names and the
@@ -753,10 +759,11 @@ code, unit tests at the bottom) and the UI is `src/app/converter_view.rs`.*
     start at Celsius → Fahrenheit.
   - Each category keeps its units while the app runs. The last category and its units are saved
     as `UnitConverterPreferences`.
-  - Keyboard: digits, `.` or `,`, `Backspace`, `Delete` (`CE`), `F9` or `-` (`±`). `Ctrl+C`
+  - Keyboard: digits, `.` or `,`, `Backspace`, `Delete` or `Esc` (`CE`), `F9` or `-` (`±`). `Ctrl+C`
     copies the active value, and `Ctrl+V` pastes a number with Windows' checks (one plain number,
     at most 16 characters). Invalid text shows `Invalid input` in both fields.
-  - A unit drop-down opens with the selected unit over its picker; `Esc` or a click outside closes it.
+  - A unit drop-down opens with the selected unit over its picker; `Esc` (which then doesn't
+    clear) or a click outside closes it.
   - In a landscape window the keypad sits next to the values, and from 640 px on the values, the
     unit pickers and the keys get larger, as in `UnitConverter.xaml`.
 - **Differences:** the unit lists don't wrap around (Windows uses a looping `CarouselPanel`).
@@ -944,7 +951,10 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
   CalcCraft's `best_fit` (the key points near the origin, the values there, a tenth more where a
   curve turns, proportional axes) matches it for x² and gives similar views elsewhere. egui's
   own Ctrl + plus / minus / 0 zoom of the whole window is turned off in every mode (Windows has
-  none).
+  none). Windows' engine can refuse a zoom (`ScaleRange` returns an `HRESULT`) by rules that
+  aren't public; CalcCraft's views stay wider than 10⁻¹⁰ of their coordinates and than about
+  2 × 10⁻³⁰⁰, far from the subnormal doubles (`View::is_valid`), whether zoomed or typed into
+  X-Min … Y-Max.
 
 #### `FEAT-GRAPH-003` Interactive Curve Tracer
 - **Status:** `[x] COMPLETED`
@@ -1030,13 +1040,17 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
 - **Status:** `[x] COMPLETED` (for the implemented modes)
 - **Priority:** `P0`
 - **Depends On:** None
-- **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs`, `src/Calculator/Views/MainPage.xaml`
+- **Windows ref:** `src/Calculator.ViewModels/Common/NavCategory.cs`, `src/Calculator/Views/MainPage.xaml`,
+  `MainPage.xaml.cs` (`OnNavigatedTo`), `src/Calculator.ViewModels/ApplicationViewModel.cs` (`OnModeChanged`)
 - **Rust:** `src/app.rs` (`Mode`, `draw_navigation`, `nav_item`, `set_mode`)
 - **Description:** The ☰ menu lists the modes under a **Calculator** and a **Converter** heading,
   with Settings at the bottom. The list scrolls when the window is too short for it.
 - **Acceptance Criteria:**
   - Switching modes keeps each mode's state, except that the Standard and Programmer modes start
     over when switching between them, as in Windows; the selected mode has the accent pill.
+  - The app opens in the mode it was closed in, saved as `Mode` with Windows' id for it
+    (`NavCategory`'s `SerializationId`: `0` Standard, `1` Scientific, … `17` Graphing) in
+    `%APPDATA%\CalcCraft`. The Settings page isn't a mode: the mode under it opens.
   - Every new mode adds itself to `Mode` and to the menu.
 - **Differences:** Windows lists 18 modes: Standard, Scientific, Graphing, Programmer, Date
   calculation, and 13 converters. CalcCraft lists all but the Currency converter. Windows draws
@@ -1141,8 +1155,9 @@ code, unit tests); UI in `src/app/graphing_view.rs`, `src/app/graph_canvas.rs` a
   - Narrator reads results and button names (`±` as "positive negative").
   - Every control has Windows' `AutomationProperties.Name` in the interface language: the keys,
     the memory buttons, "Open history flyout", "Standard Calculator" in the menu, "From" for a
-    date picker, "Convert from 5 Kilometers" for a converter value, and so on. Drop-downs report
-    their value, and tabs, list items and radio buttons whether they're selected.
+    date picker, "Convert from 5 Kilometers" for the converter value being typed into (the other
+    is "Converts into …", and their unit pickers "Input unit" and "Output unit"), and so on.
+    Drop-downs report their value, and tabs, list items and radio buttons whether they're selected.
   - The display ("Display is 7", "Display is 5 point" while typing a decimal point), the date
     results ("Difference 1 week", "Resulting date …") and the converted value are live regions
     that Narrator reads when they change.
