@@ -1108,8 +1108,9 @@ fn asymptotes(fun: &Fun, intervals: &[Interval], features: &mut Features) {
         .map(|&(m, c)| {
             let mut s = format!("y = {}", exact::coefficient_of_x(m));
             if c != 0.0 {
-                s.push_str(if c > 0.0 { " + " } else { " − " });
-                s.push_str(&exact::format_loose(c.abs()));
+                // c with its own signs: |c| after a minus would need parentheses when it
+                // has two terms (x − (√2 − 1)).
+                s.push_str(&exact::plus_term(&exact::format_loose(c)));
             }
             s
         })
@@ -1128,7 +1129,7 @@ fn family_term(step: f64, offset: f64) -> String {
     if offset == 0.0 {
         n
     } else {
-        format!("{n} + {}", exact::format(offset))
+        n + &exact::plus_term(&exact::format(offset))
     }
 }
 
@@ -1647,6 +1648,27 @@ mod tests {
                 ("(√3/3 + 1, ∞)", Direction::Decreasing),
             ]
         );
+    }
+
+    #[test]
+    fn compound_terms_keep_their_signs() {
+        // An offset of two terms is added with its own signs: x + (1 − √2) is x − √2 + 1,
+        // which x − (√2 − 1) without the parentheses, x − √2 − 1, is not.
+        for (text, asymptote) in [
+            ("y=x+1-sqrt(2)+1/x", "y = x − √2 + 1"),
+            ("y=x-(2+sqrt(3))+1/x", "y = x − √3 − 2"),
+            ("y=-x-(sqrt(2)-1)+1/x", "y = −x − √2 + 1"),
+            ("y=x+2-sqrt(3)+1/x", "y = x − √3 + 2"),
+            ("y=x+sqrt(3)-2+1/x", "y = x + √3 − 2"),
+            // A slope of two terms is one factor.
+            ("y=(1+sqrt(2))x+1/x", "y = (√2 + 1)x"),
+        ] {
+            let f = analyze_text(text);
+            assert_eq!(f.oblique_asymptotes, vec![asymptote], "{text}");
+        }
+        // The offset of a family too.
+        let f = analyze_text("y=sin(x-1+sqrt(3)/3)");
+        assert_eq!(f.x_intercepts.as_deref(), Some("{πn₁ − √3/3 + 1, n₁ ∈ ℤ}"));
     }
 
     #[test]
